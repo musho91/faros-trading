@@ -1,7 +1,7 @@
 # ==============================================================================
-# FAROS v18.0 - MASTER SUITE (FULL REPORTING)
+# FAROS v19.1 - MASTER SUITE (ECUADOR TIME FIXED)
 # Autor: Juan Arroyo | SG Consulting Group & Emporium
-# Módulos: Macro, Portfolio (con Reporte), Scanner (con Reporte), Backtest, Oráculo
+# Correcciones: Hora UTC-5 en Reportes, Buscador Smart, Lab y Gráficos Restaurados
 # ==============================================================================
 
 import streamlit as st
@@ -10,9 +10,7 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 import yfinance as yf
-import seaborn as sns 
-import matplotlib.pyplot as plt
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- CONFIGURACIÓN VISUAL ---
 st.set_page_config(page_title="FAROS | Institutional", page_icon="📡", layout="wide")
@@ -26,6 +24,31 @@ st.markdown("""
     .macro-card { padding: 20px; background-color: #f8f9fa; border-radius: 10px; border: 1px solid #ddd; margin-bottom: 20px; text-align: center; }
 </style>
 """, unsafe_allow_html=True)
+
+# ==============================================================================
+# 0. BASE DE DATOS DE ACTIVOS (SMART SEARCH)
+# ==============================================================================
+ASSET_DB = {
+    "PALANTIR (PLTR)": "PLTR", "NVIDIA (NVDA)": "NVDA", "D-WAVE (QBTS)": "QBTS", 
+    "TESLA (TSLA)": "TSLA", "APPLE (AAPL)": "AAPL", "MICROSOFT (MSFT)": "MSFT", 
+    "AMAZON (AMZN)": "AMZN", "GOOGLE (GOOGL)": "GOOGL", "META (META)": "META",
+    "BITCOIN (BTC-USD)": "BTC-USD", "ETHEREUM (ETH-USD)": "ETH-USD", 
+    "S&P 500 (SPY)": "SPY", "NASDAQ 100 (QQQ)": "QQQ", "RUSSELL 2000 (IWM)": "IWM",
+    "AMD (AMD)": "AMD", "INTEL (INTC)": "INTC", "TSMC (TSM)": "TSM",
+    "COINBASE (COIN)": "COIN", "MICROSTRATEGY (MSTR)": "MSTR",
+    "NETFLIX (NFLX)": "NFLX", "DISNEY (DIS)": "DIS",
+    "VISA (V)": "V", "MASTERCARD (MA)": "MA", "JPMORGAN (JPM)": "JPM",
+    "EXXON (XOM)": "XOM", "CHEVRON (CVX)": "CVX",
+    "SUPER MICRO (SMCI)": "SMCI", "C3.AI (AI)": "AI", "IONQ (IONQ)": "IONQ"
+}
+
+def get_tickers_from_selection(selection, manual_input):
+    """Combina la selección del menú con input manual"""
+    selected = [ASSET_DB[k] for k in selection]
+    if manual_input:
+        manual_list = [x.strip().upper() for x in manual_input.split(',')]
+        selected.extend(manual_list)
+    return list(set(selected)) 
 
 # ==============================================================================
 # 1. MOTOR LÓGICO & MATEMÁTICO (CORE)
@@ -49,7 +72,6 @@ def calculate_beta(ticker_hist, market_hist):
     except: return 1.0
 
 def calculate_psi(entropy, liquidity, trend, risk_sigma, global_penalty=0):
-    """Fórmula Maestra (PSI) - Calidad Presente"""
     score = 50 
     if entropy > risk_sigma: score -= 30
     else: score += (risk_sigma - entropy) * 10 
@@ -72,12 +94,17 @@ def get_market_status():
     except: return "UNKNOWN", 0, "Desconectado", pd.DataFrame()
 
 # ==============================================================================
-# 2. GENERADORES DE REPORTES (AUDITORÍA & SCANNER)
+# 2. GENERADORES DE REPORTES (AUDITORÍA & SCANNER) - FIXED UTC-5
 # ==============================================================================
+
+def get_ecuador_time():
+    """Calcula la hora actual en Ecuador (UTC-5)"""
+    return (datetime.utcnow() - timedelta(hours=5)).strftime("%Y-%m-%d %H:%M:%S (Quito/EC)")
 
 def generate_portfolio_report(df_portfolio, metrics, risk_profile):
     """Reporte de Auditoría de Portafolio."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_ec = get_ecuador_time()
+    
     df_html = df_portfolio[['Ticker', 'Weight', 'Price', 'Beta', 'Psi', 'Status', 'Action']].to_html(classes='table', index=False, float_format="%.2f")
     
     html = f"""
@@ -90,7 +117,7 @@ def generate_portfolio_report(df_portfolio, metrics, risk_profile):
         .metric-box {{ display: inline-block; width: 30%; background: #f4f4f4; padding: 10px; margin-right: 10px; text-align: center; border-radius: 5px; }}
     </style></head><body>
         <h1>FAROS | Auditoría de Portafolio</h1>
-        <p><strong>Operador:</strong> SG Consulting Group & Emporium | <strong>Fecha:</strong> {now}</p>
+        <p><strong>Operador:</strong> SG Consulting Group & Emporium | <strong>Fecha:</strong> {now_ec}</p>
         
         <h3>1. Métricas Agregadas</h3>
         <div>
@@ -109,16 +136,14 @@ def generate_portfolio_report(df_portfolio, metrics, risk_profile):
 
 def generate_scanner_report(df_scan, market_status, risk_profile):
     """Reporte de Escaneo de Oportunidades."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_ec = get_ecuador_time()
     
-    # Preparar tabla para impresión
     df_print = df_scan[['Ticker', 'Price', 'Signal', 'Psi', 'Entropy', 'Trend']].copy()
     df_print['Trend'] = (df_print['Trend']/100).map("{:.1%}".format)
     df_print['Entropy'] = df_print['Entropy'].map("{:.2f}σ".format)
     df_html = df_print.to_html(classes='table', index=False, float_format="%.2f")
     
-    # Encontrar Top Pick
-    best_asset = df_scan.iloc[0] # Asumimos que viene ordenado por Psi
+    best_asset = df_scan.iloc[0] 
     
     html = f"""
     <html><head><style>
@@ -131,7 +156,7 @@ def generate_scanner_report(df_scan, market_status, risk_profile):
         .highlight {{ background-color: #d4edda; padding: 15px; border-left: 5px solid #28a745; margin: 20px 0; }}
     </style></head><body>
         <h1>FAROS | Informe de Inteligencia de Mercado</h1>
-        <p><strong>Emisión:</strong> {now} | <strong>Perfil:</strong> {risk_profile}</p>
+        <p><strong>Emisión:</strong> {now_ec} | <strong>Perfil:</strong> {risk_profile}</p>
         
         <div class="status-bar">
             CONTEXTO GLOBAL (SPY): {market_status}
@@ -215,18 +240,25 @@ def analyze_portfolio(holdings, risk_tolerance):
             results.append({"Ticker": t, "Weight": holdings[t], "Price": curr_price, "Beta": beta, "Entropy": z_entropy, "Psi": psi, "Status": status, "Action": action})
         except: pass
     df_res = pd.DataFrame(results)
-    data_corr = yf.download(tickers, period="6mo")['Close'].pct_change().dropna()
-    corr_matrix = data_corr.corr()
+    
+    # Matriz Correlación
+    try:
+        data_corr = yf.download(tickers, period="6mo")['Close'].pct_change().dropna()
+        corr_matrix = data_corr.corr()
+    except:
+        corr_matrix = pd.DataFrame() 
+
     port_beta = (df_res['Beta'] * df_res['Weight']).sum()
     port_psi = (df_res['Psi'] * df_res['Weight']).sum()
+    
     return df_res, corr_matrix, {"Beta": port_beta, "Psi": port_psi}
 
 # --- SCANNER ---
 @st.cache_data(ttl=300)
-def get_live_data(tickers_input, window_cfg, risk_tolerance):
+def get_live_data(tickers_list, window_cfg, risk_tolerance):
     m_status, m_entropy, m_msg, _ = get_market_status()
     global_penalty = 30 if m_status == "GAS" else (10 if m_status == "WARNING" else 0)
-    tickers_list = [x.strip().upper() for x in tickers_input.split(',')]
+
     data_list = []
     entropy_limit = risk_tolerance 
     if risk_tolerance >= 5.0: exit_threshold = -0.15
@@ -366,16 +398,26 @@ if app_mode == "🌎 MACRO ECONOMÍA":
             st.plotly_chart(px.line(df_ch), use_container_width=True)
 
 # --------------------------------------------------------------------------
-# MÓDULO: PORTAFOLIO
+# MÓDULO: PORTAFOLIO (FIXED TABLE & SEARCH)
 # --------------------------------------------------------------------------
 elif app_mode == "💼 GESTIÓN PORTAFOLIOS":
     st.title("Gestión de Activos & Riesgo")
-    with st.expander("📝 Editar Composición del Portafolio"):
+    
+    with st.expander("📝 Editar Composición del Portafolio", expanded=True):
         c1, c2 = st.columns(2)
-        portfolio_txt = c1.text_area("Activos y Pesos (Ticker, Peso)", "PLTR, 0.30\nNVDA, 0.25\nQBTS, 0.10\nSPY, 0.20\nBTC-USD, 0.15", height=150)
+        # SMART SEARCH
+        sel_assets = c1.multiselect("Seleccionar Activos:", options=list(ASSET_DB.keys()), default=["PALANTIR (PLTR)", "NVIDIA (NVDA)"])
+        manual_assets = c1.text_input("Otros Tickers (separados por coma):", "")
+        
+        final_tickers = get_tickers_from_selection(sel_assets, manual_assets)
+        
+        weights_input = c2.text_area("Asignar Pesos (Ticker, 0.XX):", 
+                                     value="\n".join([f"{t}, {1/len(final_tickers):.2f}" for t in final_tickers]) if final_tickers else "",
+                                     height=150)
+        
         if c2.button("Analizar Cartera"):
             try:
-                holdings = {}; [holdings.update({l.split(',')[0].strip().upper(): float(l.split(',')[1].strip())}) for l in portfolio_txt.split('\n') if len(l.split(','))==2]
+                holdings = {}; [holdings.update({l.split(',')[0].strip().upper(): float(l.split(',')[1].strip())}) for l in weights_input.split('\n') if len(l.split(','))==2]
                 st.session_state['holdings'] = holdings
             except: st.error("Error formato")
 
@@ -385,17 +427,28 @@ elif app_mode == "💼 GESTIÓN PORTAFOLIOS":
             st.markdown("### 📊 Termodinámica del Portafolio")
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("Activos", len(df_p)); k2.metric("Beta", f"{metrics['Beta']:.2f}x"); k3.metric("Score TAI", f"{metrics['Psi']:.0f}/100"); k4.metric("Estado", "LÍQUIDO" if metrics['Psi']>50 else "GASEOSO")
-            st.plotly_chart(px.imshow(corr_m, text_auto=True, color_continuous_scale='RdBu_r'), use_container_width=True)
             
-            # BOTÓN DE REPORTE
+            if not corr_m.empty:
+                st.plotly_chart(px.imshow(corr_m, text_auto=True, color_continuous_scale='RdBu_r'), use_container_width=True)
+            
+            st.subheader("🚨 Alertas Tácticas")
+            critical = df_p[df_p['Action'] != "MANTENER"]
+            if not critical.empty:
+                for i, row in critical.iterrows():
+                    color = "red" if "REDUCIR" in row['Action'] else "green"
+                    st.markdown(f"<div style='padding:10px; border:1px solid {color}; border-radius:5px; margin-bottom:5px;'><b>{row['Ticker']}:</b> {row['Action']} (Ψ: {row['Psi']:.0f})</div>", unsafe_allow_html=True)
+            else: st.success("✅ Portafolio saludable.")
+            
+            # REPORT GEN
             if st.button("🖨️ Generar Informe de Auditoría"):
                 report_html = generate_portfolio_report(df_p, metrics, risk_profile)
                 st.download_button("Descargar Informe (HTML)", report_html, "auditoria_faros.html", "text/html")
             
-            with st.expander("📄 Detalle Técnico"): st.dataframe(df_p)
+            with st.expander("📄 Detalle Técnico"): 
+                st.dataframe(df_p)
 
 # --------------------------------------------------------------------------
-# MÓDULO: SCANNER
+# MÓDULO: SCANNER (RESTORED LAB & SMART SEARCH)
 # --------------------------------------------------------------------------
 elif app_mode == "🔍 SCANNER MERCADO":
     time_h = st.selectbox("Horizonte", ["Corto Plazo", "Medio Plazo", "Largo Plazo"])
@@ -403,52 +456,76 @@ elif app_mode == "🔍 SCANNER MERCADO":
     elif "Medio" in time_h: cfg = {'volatility': 20, 'trend': 50, 'download': '6mo'}
     else: cfg = {'volatility': 60, 'trend': 200, 'download': '2y'}
     
-    tickers = st.text_area("Cartera:", "PLTR, QBTS, NVDA, SPY, BTC-USD", height=100)
-    if st.button("Analizar Mercado"): st.cache_data.clear()
+    # SMART SEARCH UI
+    col_search, col_manual = st.columns([3, 1])
+    selected_assets = col_search.multiselect("Buscar Empresas:", options=list(ASSET_DB.keys()), default=["PALANTIR (PLTR)", "NVIDIA (NVDA)", "D-WAVE (QBTS)"])
+    manual_tickers = col_manual.text_input("Otros (Tickers):", "")
     
-    df, m_status, m_entropy, m_msg = get_live_data(tickers, cfg, risk_sigma)
-    cols = {"GAS":("#FFCDD2","#B71C1C","🔥"), "WARNING":("#FFF9C4","#F57F17","⚠️"), "LIQUID":("#C8E6C9","#1B5E20","🌍")}
-    bg, txt, ico = cols.get(m_status, ("#eee","#333","❓"))
-    
-    st.markdown(f"<div class='global-status' style='background-color:{bg}; color:{txt};'>{ico} SPY: {m_msg}</div>", unsafe_allow_html=True)
-    
-    if not df.empty:
-        # BOTÓN DE REPORTE SCANNER (NUEVO)
-        if st.button("🖨️ Generar Informe de Oportunidades"):
-            scan_html = generate_scanner_report(df, m_status, risk_profile)
-            st.download_button("Descargar Informe (HTML)", scan_html, "escaneo_faros.html", "text/html")
-            
-        c1, c2 = st.columns([2,1])
-        with c2: st.plotly_chart(px.scatter(df, x="Entropy", y="Liquidity", color="Category", text="Ticker"), use_container_width=True)
-        with c1:
-            for i, r in df.iterrows():
-                with st.container(border=True):
-                    hc1, hc2 = st.columns([3,1]); hc1.markdown(f"### **{r['Ticker']}** ${r['Price']:.2f}"); hc2.markdown(f"**Ψ: {r['Psi']:.0f}**")
-                    msg = f"**{r['Signal']}**: {r['Narrative']}"
-                    if r['Category']=='success': st.success(msg)
-                    elif r['Category']=='warning': st.warning(msg)
-                    elif r['Category']=='danger': st.error(msg)
-                    else: st.info(msg)
+    if st.button("Analizar Mercado"): 
+        st.cache_data.clear()
+        target_list = get_tickers_from_selection(selected_assets, manual_tickers)
+        
+        df, m_status, m_entropy, m_msg = get_live_data(target_list, cfg, risk_sigma)
+        cols = {"GAS":("#FFCDD2","#B71C1C","🔥"), "WARNING":("#FFF9C4","#F57F17","⚠️"), "LIQUID":("#C8E6C9","#1B5E20","🌍")}
+        bg, txt, ico = cols.get(m_status, ("#eee","#333","❓"))
+        
+        st.markdown(f"<div class='global-status' style='background-color:{bg}; color:{txt};'>{ico} SPY: {m_msg}</div>", unsafe_allow_html=True)
+        
+        if not df.empty:
+            if st.button("🖨️ Generar Informe de Oportunidades"):
+                scan_html = generate_scanner_report(df, m_status, risk_profile)
+                st.download_button("Descargar Informe (HTML)", scan_html, "escaneo_faros.html", "text/html")
+                
+            c1, c2 = st.columns([2,1])
+            with c2: st.plotly_chart(px.scatter(df, x="Entropy", y="Liquidity", color="Category", text="Ticker"), use_container_width=True)
+            with c1:
+                for i, r in df.iterrows():
+                    with st.container(border=True):
+                        hc1, hc2 = st.columns([3,1]); hc1.markdown(f"### **{r['Ticker']}** ${r['Price']:.2f}"); hc2.markdown(f"**Ψ: {r['Psi']:.0f}**")
+                        msg = f"**{r['Signal']}**: {r['Narrative']}"
+                        if r['Category']=='success': st.success(msg)
+                        elif r['Category']=='warning': st.warning(msg)
+                        elif r['Category']=='danger': st.error(msg)
+                        else: st.info(msg)
+                        
+                        # LAB RESTORED
+                        with st.expander("🔬 Lab Data"):
+                            st.markdown(f"**Vol:** {r['Raw_Vol']:.0f}% ({r['Entropy']:.2f}σ) | **Tendencia:** {r['Trend']:+.1f}% | **Liq:** {r['Raw_Vol_Ratio']:.1f}x")
 
 # --------------------------------------------------------------------------
-# MÓDULO: BACKTEST
+# MÓDULO: BACKTEST (RESTORED CHARTS)
 # --------------------------------------------------------------------------
 elif app_mode == "⏳ BACKTEST LAB":
     st.title("Validación Histórica")
+    
+    # Inputs Restaurados
     c_tick, c_cap = st.columns([1, 1]); tck = c_tick.text_input("Activo:", "PLTR").upper(); cap = c_cap.number_input("Capital", value=10000)
+    c1, c2 = st.columns(2); d1 = c1.date_input("Inicio", pd.to_datetime("2023-01-01")); d2 = c2.date_input("Fin", pd.to_datetime("2025-01-05"))
+    
     if st.button("Ejecutar"):
-        res = run_backtest(tck, "2023-01-01", "2025-01-05", cap, risk_sigma)
+        res = run_backtest(tck, d1, d2, cap, risk_sigma)
         if res is not None:
-            st.metric("Resultado Final", f"${res['Eq_Strat'].iloc[-1]:,.0f}")
-            fig = go.Figure(); fig.add_trace(go.Scatter(x=res.index, y=res['Close'], name='Precio', line=dict(color='black', width=1), opacity=0.3))
+            fin = res['Eq_Strat'].iloc[-1]
+            st.metric("Resultado Final", f"${fin:,.0f}", delta=f"{(fin/cap-1)*100:.1f}%")
+            
+            st.subheader("Ciclos Detectados")
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=res.index, y=res['Close'], name='Precio', line=dict(color='black', width=1), opacity=0.3))
             colors = {'GAS': 'red', 'LIQUID': '#00FF41', 'PLASMA': '#FFD700', 'SOLID': 'gray'}
             for p, c in colors.items(): 
                 s = res[res['Phase']==p]; 
                 if not s.empty: fig.add_trace(go.Scatter(x=s.index, y=s['Close'], mode='markers', name=p, marker=dict(color=c, size=5)))
             st.plotly_chart(fig, use_container_width=True)
+            
+            # CHART RESTORED
+            st.subheader("Curva de Capital (Tu Dinero)")
+            fig2 = go.Figure()
+            fig2.add_trace(go.Scatter(x=res.index, y=res['Eq_Strat'], name='FAROS', line=dict(color='blue', width=2)))
+            fig2.add_trace(go.Scatter(x=res.index, y=res['Eq_BH'], name='Buy & Hold', line=dict(color='gray', dash='dot')))
+            st.plotly_chart(fig2, use_container_width=True)
 
 # --------------------------------------------------------------------------
-# MÓDULO: ORÁCULO
+# MÓDULO: ORÁCULO (RESTORED NOTES)
 # --------------------------------------------------------------------------
 elif app_mode == "🔮 ORÁCULO FUTURO":
     st.title("Proyección TAI (Potencial Φ)")
@@ -465,6 +542,15 @@ elif app_mode == "🔮 ORÁCULO FUTURO":
             st.markdown(f"<div style='text-align:center; padding:15px; border:1px solid #ddd; border-radius:10px; background-color:#f9f9f9;'><h2 style='margin:0;'>POTENCIAL FUTURO (Φ)</h2><h1 style='margin:0; font-size:4rem; color:{p_col};'>{phi:.0f}/100</h1><p>Probabilidad: <b>{win_rate*100:.0f}%</b> | R/R: <b>{rr:.1f}x</b></p></div>", unsafe_allow_html=True)
             k1, k2, k3 = st.columns(3)
             k1.metric("🟢 Techo", f"${p95:.2f}"); k2.metric("🔵 Base", f"${p50:.2f}"); k3.metric("🔴 Suelo", f"${p05:.2f}")
+            
+            # NOTES RESTORED
+            with st.expander("📖 Interpretación Táctica de Escenarios", expanded=True):
+                st.markdown("""
+                * **🟢 Techo (Optimista):** Rendimiento excepcional (Top 5% de probabilidad). Si llega aquí, es un 'Moonshot'.
+                * **🔵 Base (Probable):** Mediana estadística. Si la inercia actual se mantiene, el precio orbitará esta zona.
+                * **🔴 Suelo (Riesgo):** Escenario de Cisne Negro (Peor 5%). Este nivel marca tu **Riesgo Máximo Probable**.
+                """)
+            
             fig = go.Figure()
             for i in range(50): fig.add_trace(go.Scatter(y=paths[:, i], line=dict(color='gray', width=0.5), opacity=0.1, showlegend=False))
             fig.add_trace(go.Scatter(y=np.percentile(paths, 50, axis=1), name='Tendencia', line=dict(color='blue', width=3)))
