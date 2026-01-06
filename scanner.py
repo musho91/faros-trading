@@ -1,10 +1,10 @@
 # ==============================================================================
-# FAROS v15.1 - THE MASTER SUITE (FINAL POLISH)
+# FAROS v15.3 - MASTER SUITE (FINAL DEFINITIVE)
 # Autor: Juan Arroyo | SG Consulting Group
 # Módulos: 
-#   1. Scanner Global (Con Inteligencia Sistémica & PSI Score)
-#   2. Backtest Time Machine (4 Estados de la Materia)
-#   3. Oráculo Estocástico (Con Momentum Bias, PHI Score & Explicación Táctica)
+#   1. Scanner Global (Con Señales Explícitas, PSI Score & Semáforo Sistémico)
+#   2. Backtest Time Machine (4 Estados de la Materia & Capital Editable)
+#   3. Oráculo Estocástico (Estable con Seed, Momentum Bias & PHI Score)
 # ==============================================================================
 
 import streamlit as st
@@ -50,6 +50,7 @@ def get_market_status():
     except: return "UNKNOWN", 0, "Desconectado"
 
 def calculate_psi(entropy, liquidity, trend, risk_sigma, global_penalty=0):
+    """Fórmula Maestra (PSI) - Calidad Presente"""
     score = 50 
     if entropy > risk_sigma: score -= 30
     else: score += (risk_sigma - entropy) * 10 
@@ -167,7 +168,7 @@ def run_backtest(ticker, start, end, capital, risk_tolerance):
     except: return None
 
 def run_oracle_sim(ticker, days, risk_tolerance):
-    """Oráculo con Momentum Bias (Corrección para Growth Stocks)"""
+    """Oráculo Estabilizado con Semilla (Seed) y Momentum Bias"""
     try:
         stock = yf.Ticker(ticker)
         hist = stock.history(period="1y")
@@ -184,7 +185,11 @@ def run_oracle_sim(ticker, days, risk_tolerance):
         trend_drift = trend_force / 252 * 2 
         final_drift = (hist_drift * 0.3) + (trend_drift * 0.7) if risk_tolerance >= 3 else hist_drift
         
-        sims = 200
+        # SEED ESTABILIZADOR
+        unique_seed = int(sum(ord(c) for c in ticker) + days)
+        np.random.seed(unique_seed)
+
+        sims = 1000 
         paths = np.zeros((days, sims)); paths[0] = last_price
         proj_h = (daily_vol * np.sqrt(252) * 100 - 20) / 15
         
@@ -248,13 +253,18 @@ if app_mode == "SCANNER":
                 with st.container(border=True):
                     hc1, hc2 = st.columns([3,1])
                     hc1.markdown(f"### **{r['Ticker']}** ${r['Price']:.2f}")
+                    # PSI Score Color
                     pc = "green" if r['Psi']>70 else "orange" if r['Psi']>40 else "red"
                     hc2.markdown(f"**Ψ: :{pc}[{r['Psi']:.0f}]**")
                     
-                    if r['Category']=='success': st.success(r['Narrative'])
-                    elif r['Category']=='warning': st.warning(r['Narrative'])
-                    elif r['Category']=='danger': st.error(r['Narrative'])
-                    else: st.info(r['Narrative'])
+                    # --- AQUÍ ESTÁ LA CORRECCIÓN: SEÑAL VISIBLE ---
+                    msg = f"**{r['Signal']}**: {r['Narrative']}"
+                    
+                    if r['Category']=='success': st.success(msg)
+                    elif r['Category']=='warning': st.warning(msg)
+                    elif r['Category']=='danger': st.error(msg)
+                    else: st.info(msg)
+                    # ---------------------------------------------
                     
                     with st.expander("🔬 Lab Data"):
                         st.markdown(f"**Vol:** {r['Raw_Vol']:.0f}% | **Tendencia:** {r['Trend']:+.1f}% | **Liq:** {r['Raw_Vol_Ratio']:.1f}x")
@@ -294,7 +304,7 @@ elif app_mode == "BACKTEST":
 # --- MÓDULO 3: ORÁCULO ---
 elif app_mode == "ORÁCULO":
     st.title("Proyección TAI (Potencial Φ)")
-    st.caption("Simulación Estocástica con Ajuste de Momentum.")
+    st.caption("Simulación Estocástica con Inercia de Tendencia.")
     
     c_tick, c_days = st.columns([1, 1])
     o_tick = c_tick.text_input("Activo:", "PLTR").upper()
@@ -331,16 +341,16 @@ elif app_mode == "ORÁCULO":
             
             # 2. MÉTRICAS
             k1, k2, k3 = st.columns(3)
-            k1.metric("🟢 Techo (Optimista)", f"${p95:.2f}", f"+{((p95/start)-1)*100:.1f}%")
-            k2.metric("🔵 Base (Probable)", f"${p50:.2f}", f"{((p50/start)-1)*100:.1f}%")
-            k3.metric("🔴 Suelo (Riesgo)", f"${p05:.2f}", f"{((p05/start)-1)*100:.1f}%")
+            k1.metric("🟢 Techo", f"${p95:.2f}", f"+{((p95/start)-1)*100:.1f}%")
+            k2.metric("🔵 Base", f"${p50:.2f}", f"{((p50/start)-1)*100:.1f}%")
+            k3.metric("🔴 Suelo", f"${p05:.2f}", f"{((p05/start)-1)*100:.1f}%")
             
-            # 3. EXPLICACIÓN TÁCTICA (¡LO QUE FALTABA!)
-            with st.expander("📖 Guía de Interpretación de Escenarios", expanded=True):
+            # 3. INTERPRETACIÓN TÁCTICA
+            with st.expander("📖 Interpretación Táctica de Escenarios", expanded=True):
                 st.markdown("""
-                * **🟢 Escenario Optimista (Techo):** Representa el **mejor 5%** de los casos simulados. Si el precio llega aquí, el activo ha superado las expectativas estadísticas (Rendimiento excepcional).
-                * **🔵 Escenario Base (Mediana):** Es el camino de mayor probabilidad estadística. Si la inercia actual se mantiene sin eventos extraordinarios, el precio orbitará esta zona.
-                * **🔴 Escenario Pesimista (Suelo):** Representa el **peor 5%** de los casos (Cisne Negro). Este nivel marca tu **Riesgo Máximo Probable**; si rompe este nivel, la estructura del activo ha colapsado.
+                * **🟢 Techo (Optimista):** Rendimiento excepcional (Top 5% de probabilidad). Si llega aquí, es un 'Moonshot'.
+                * **🔵 Base (Probable):** Mediana estadística. Si la inercia actual se mantiene, el precio orbitará esta zona.
+                * **🔴 Suelo (Riesgo):** Escenario de Cisne Negro (Peor 5%). Este nivel marca tu **Riesgo Máximo Probable**.
                 """)
 
             # 4. GRÁFICO
