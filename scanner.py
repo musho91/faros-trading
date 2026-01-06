@@ -1,151 +1,173 @@
 # ==============================================================================
-# FAROS v4.1 - PORTFOLIO RADAR & AI ANALYST
-# Autor: Juan Arroyo | TAI-ACF Framework
+# FAROS v2.0 - TAI-ACF EXECUTIVE DASHBOARD
+# Autor: Juan Arroyo | SG Consulting Group
+# Framework: Streamlit + Plotly
 # ==============================================================================
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-import yfinance as yf
+import plotly.graph_objects as go
 import plotly.express as px
-import warnings
 
-warnings.filterwarnings("ignore")
+# --- 1. CONFIGURACIÓN DE PÁGINA (ESTILO CYBERPUNK) ---
+st.set_page_config(
+    page_title="FAROS | TAI-ACF System",
+    page_icon="📡",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# --- CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="FAROS AI Radar", page_icon="📡", layout="wide")
+# Estilos CSS personalizados para "Dark Mode" financiero
+st.markdown("""
+<style>
+    .stApp {
+        background-color: #0e1117;
+        color: #00FF00;
+    }
+    .metric-card {
+        background-color: #1e2130;
+        border: 1px solid #444;
+        padding: 15px;
+        border-radius: 5px;
+        text-align: center;
+    }
+    h1, h2, h3 {
+        font-family: 'Roboto Mono', monospace;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-st.title("📡 FAROS: Portfolio Radar System")
-st.markdown("### TAI-ACF Multi-Asset Scanner | v4.1 (AI Analyst Build)")
+# --- 2. MOTOR DE DATOS SIMULADO (MOCK DATA) ---
+# En producción, esto se conecta a tu API de EvalIA o Yahoo Finance
+def get_mock_data():
+    data = {
+        'Ticker': ['PLTR', 'CVX', 'VE-BONDS', 'SPY', 'BTC', 'TSLA', 'AMTB', 'LSEG', 'HAG'],
+        'Precio': [167.86, 142.50, 32.91, 580.12, 102500, 240.50, 28.40, 115.20, 34.50],
+        'Z_Liquidez': [1.2, 0.8, -2.5, 0.9, 1.1, -0.4, -0.2, 0.9, 0.4],  # Eje Y (Estructura)
+        'Z_Entropia': [0.4, 0.3, 2.8, 0.5, 1.4, 1.8, 1.1, 0.2, 0.7],     # Eje X (Caos)
+        'Flujo_M': [1, 1, 1, 0, 1, -1, 0, 1, 1] # 1=Entrada, -1=Salida
+    }
+    df = pd.DataFrame(data)
+    
+    # Clasificación de Fases (Lógica TAI-ACF)
+    conditions = [
+        (df['Z_Entropia'] > 1.5),              # GAS (Caos/Riesgo)
+        (df['Z_Liquidez'] < -1.5),             # PLASMA (Iliquidez/Burbuja)
+        (df['Z_Liquidez'] > 0) & (df['Z_Entropia'] < 1.0), # LÍQUIDO (Crecimiento Sano)
+    ]
+    choices = ['GAS 🔴', 'PLASMA 🟡', 'LÍQUIDO 🔵']
+    df['Fase'] = np.select(conditions, choices, default='SÓLIDO ⚪')
+    
+    # Gobernanza Psi (Cálculo simplificado para demo)
+    # Psi bajo = Veto/Cash. Psi alto = Full Investment.
+    df['Psi'] = np.where(df['Fase'].str.contains('GAS'), 0.0, 
+                np.where(df['Fase'].str.contains('LÍQUIDO'), 0.95, 0.5))
+    
+    return df
 
-# --- SIDEBAR ---
+# --- 3. UI: SIDEBAR ---
 with st.sidebar:
-    st.header("🎛️ Configuración")
-    default_tickers = "ARM, NVDA, MSTR, AAPL, AMD, META, GOOG, GME, IONQ, PLTR, TSLA, AMZN"
-    tickers_input = st.text_area("Watchlist (separados por coma):", value=default_tickers, height=150)
-    lookback = st.slider("Ventana (Días):", 10, 60, 20)
-    scan_button = st.button("🛰️ INICIAR ESCANEO", type="primary")
+    st.title("📡 FAROS SYSTEM")
+    st.markdown("`v2.0.1 | TAI-ACF CORE`")
     st.markdown("---")
-    st.caption("Juan Arroyo | CEO & Founder")
-
-# --- MOTOR MATEMÁTICO ---
-def analyze_asset(ticker, window=20):
-    try:
-        df = yf.download(ticker, period="1y", progress=False)
-        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-        if df.empty or len(df) < 60: return None
-
-        # Física
-        returns = df['Close'].pct_change()
-        vol = returns.rolling(window).std()
-        
-        # Liquidez (L)
-        l_raw = np.log(df['Volume'] + 1) / (vol + 1e-6)
-        l_mean = l_raw.rolling(60).mean()
-        l_std = l_raw.rolling(60).std()
-        L_score = (l_raw.iloc[-1] - l_mean.iloc[-1]) / (l_std.iloc[-1] + 1e-6)
-
-        # Entropía (H)
-        net = df['Close'].diff(window).abs()
-        path = df['Close'].diff().abs().rolling(window).sum()
-        h_raw = 1 - (net / (path + 1e-6))
-        h_mean = h_raw.rolling(60).mean()
-        h_std = h_raw.rolling(60).std()
-        H_score = (h_raw.iloc[-1] - h_mean.iloc[-1]) / (h_std.iloc[-1] + 1e-6)
-
-        # Gobernanza Psi
-        phase = "SÓLIDO (Hold)"
-        action = "OBSERVAR"
-        
-        if L_score > -0.5 and H_score < 1.0: phase = "LÍQUIDO (Tendencia)"
-        if H_score > 1.5: phase = "GAS (Crash/Caos)"; action = "VENTA (Cash)"
-        if L_score < -1.5: phase = "PLASMA (Burbuja)"; action = "REDUCIR"
-
-        raw_signal = L_score - H_score
-        psi = 1 / (1 + np.exp(-raw_signal))
-        
-        if "GAS" in phase: psi = 0.0
-        elif psi > 0.75 and "LÍQUIDO" in phase: action = "COMPRA FUERTE 🚀"
-        elif psi > 0.6: action = "ACUMULAR ✅"
-
-        return {
-            "Ticker": ticker, "Precio": df['Close'].iloc[-1],
-            "L": round(L_score, 2), "H": round(H_score, 2),
-            "Ψ": round(psi, 2), "Fase": phase, "Estrategia": action
-        }
-    except: return None
-
-# --- BOT NARRATIVO (La novedad) ---
-def generate_bot_insight(row):
-    ticker = row['Ticker']
-    psi = row['Ψ']
-    l = row['L']
-    h = row['H']
     
-    insight = f"**Análisis de Inteligencia para {ticker}:**\n\n"
+    mode = st.radio("MODO DE OPERACIÓN:", ["Radar de Fases", "Análisis Profundo", "Señales IA"])
     
-    if psi > 0.75:
-        insight += f"🔥 **¡Oportunidad Alpha Detectada!** {ticker} es el líder indiscutible del grupo.\n"
-        insight += f"- **¿Por qué?** Su Liquidez ({l}σ) es extremadamente alta, lo que indica que las grandes instituciones están comprando fuerte y sosteniendo el precio. "
-        insight += f"Al mismo tiempo, su Entropía ({h}σ) es baja, lo que significa que la subida es limpia, eficiente y ordenada.\n"
-        insight += "- **Conclusión:** El sistema recomienda **ASIGNACIÓN MÁXIMA**."
-    elif psi < 0.3:
-        insight += f"⚠️ **Alerta de Riesgo Estructural.** El sistema ha vetado a {ticker}.\n"
-        insight += f"- **El Problema:** Detectamos condiciones de 'Gas' o falta de soporte institucional. La probabilidad de caída es alta.\n"
-        insight += "- **Conclusión:** Mantenerse en CASH o VENDER."
-    else:
-        insight += f"⚖️ **Condiciones Neutrales.** {ticker} es un activo seguro pero aburrido hoy.\n"
-        insight += "- **Detalle:** Tiene liquidez decente, pero falta el 'momentum' explosivo que buscamos. "
-        insight += "Es bueno para preservar capital, pero no para multiplicarlo agresivamente hoy."
-        
-    return insight
+    st.markdown("---")
+    st.info("⚡ Estado del Sistema: ONLINE")
+    st.text("Conexión: EvalIA-Node-1")
 
-# --- INTERFAZ ---
-if scan_button:
-    ticker_list = [x.strip().upper() for x in tickers_input.split(',')]
-    results = []
-    bar = st.progress(0)
+# --- 4. UI: DASHBOARD PRINCIPAL (RADAR) ---
+df = get_mock_data()
+
+if mode == "Radar de Fases":
+    st.title("🗺️ RADAR TERMODINÁMICO DE MERCADO")
+    st.markdown("Visualización de transiciones de fase en tiempo real (No-Ergodicidad).")
     
-    for i, t in enumerate(ticker_list):
-        res = analyze_asset(t, lookback)
-        if res: results.append(res)
-        bar.progress((i + 1) / len(ticker_list))
+    col1, col2 = st.columns([3, 1])
     
-    if results:
-        df = pd.DataFrame(results).sort_values(by="Ψ", ascending=False)
-        top_pick = df.iloc[0] # El Ganador
+    with col1:
+        # GRÁFICO DE DISPERSIÓN (Phase Diagram)
+        fig = px.scatter(df, x="Z_Entropia", y="Z_Liquidez", 
+                         color="Fase", 
+                         size="Precio", 
+                         text="Ticker",
+                         hover_data=["Psi"],
+                         color_discrete_map={
+                             "LÍQUIDO 🔵": "#00CCFF", 
+                             "SÓLIDO ⚪": "#AAAAAA", 
+                             "GAS 🔴": "#FF0000", 
+                             "PLASMA 🟡": "#FFFF00"
+                         })
         
-        # --- SECCIÓN DEL BOT ANALISTA ---
-        st.success("✅ Escaneo Finalizado.")
+        # Zonas de Fondo (Cuadrantes TAI-ACF)
+        fig.add_hrect(y0=-3, y1=-1.5, line_width=0, fillcolor="yellow", opacity=0.1) # Zona Plasma
+        fig.add_vrect(x0=1.5, x1=4, line_width=0, fillcolor="red", opacity=0.1)     # Zona Gas
         
-        with st.container():
-            col_bot, col_kpi = st.columns([2, 1])
-            
-            with col_bot:
-                st.markdown("### 🤖 El Analista Táctico Dice:")
-                st.info(generate_bot_insight(top_pick))
-            
-            with col_kpi:
-                st.markdown("### 🏆 Top Pick Metrics")
-                st.metric(label=f"Ticker: {top_pick['Ticker']}", value=f"${top_pick['Precio']:.2f}")
-                st.metric(
-                    label="Gobernanza (Ψ)", 
-                    value=top_pick['Ψ'], 
-                    delta="Excelente" if top_pick['Ψ']>0.7 else "Normal",
-                    help="Puntaje de 0 a 1 que combina Liquidez y Entropía. Más alto = Mejor compra."
-                )
+        fig.update_traces(textposition='top center', marker=dict(line=dict(width=2, color='DarkSlateGrey')))
+        fig.update_layout(
+            template="plotly_dark",
+            xaxis_title="Entropía (Caos H) →",
+            yaxis_title="Liquidez (Estructura L) ↑",
+            height=600,
+            showlegend=True
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        st.subheader("🚨 Alertas de Fase")
+        for index, row in df.iterrows():
+            if "GAS" in row['Fase']:
+                st.error(f"**{row['Ticker']}** ha entrado en FASE GASEOSA. Veto activo.")
+            elif "BONDS" in row['Ticker']:
+                st.success(f"**{row['Ticker']}** detecta inyección de energía ($\vec{{M}} > 0$).")
+            elif "PLTR" in row['Ticker']:
+                st.info(f"**{row['Ticker']}** mantiene estabilidad en FASE LÍQUIDA.")
 
-        st.markdown("---")
+# --- 5. UI: ANÁLISIS PROFUNDO (GAUGES) ---
+elif mode == "Análisis Profundo":
+    selected_ticker = st.selectbox("Seleccione Activo:", df['Ticker'])
+    asset = df[df['Ticker'] == selected_ticker].iloc[0]
+    
+    st.title(f"🧬 ANÁLISIS TAI-ACF: {selected_ticker}")
+    
+    # Panel de Métricas
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Precio Actual", f"${asset['Precio']}")
+    m2.metric("Fase Actual", asset['Fase'])
+    m3.metric("Gobernanza (Ψ)", f"{asset['Psi']:.2f}", delta_color="normal")
+    m4.metric("Flujo Capital", "ENTRANDO" if asset['Flujo_M']>0 else "SALIENDO")
+    
+    st.markdown("---")
+    
+    # Medidores (Gauges)
+    c1, c2, c3 = st.columns(3)
+    
+    with c1:
+        st.markdown("### 🌊 LIQUIDEZ ($Z_L$)")
+        fig_l = go.Figure(go.Indicator(
+            mode = "gauge+number", value = asset['Z_Liquidez'],
+            gauge = {'axis': {'range': [-3, 3]}, 'bar': {'color': "blue"}}
+        ))
+        fig_l.update_layout(height=300, margin=dict(t=10,b=10))
+        st.plotly_chart(fig_l, use_container_width=True)
+        
+    with c2:
+        st.markdown("### 🎲 ENTROPÍA ($Z_H$)")
+        fig_h = go.Figure(go.Indicator(
+            mode = "gauge+number", value = asset['Z_Entropia'],
+            gauge = {'axis': {'range': [0, 3]}, 'bar': {'color': "red" if asset['Z_Entropia']>1.5 else "green"},
+                     'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': 1.5}}
+        ))
+        fig_h.update_layout(height=300, margin=dict(t=10,b=10))
+        st.plotly_chart(fig_h, use_container_width=True)
 
-        # --- RADAR Y TABLA ---
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            st.subheader("🗺️ Mapa de Fases")
-            fig = px.scatter(df, x="L", y="H", color="Fase", text="Ticker", size="Ψ",
-                             color_discrete_map={"GAS (Crash/Caos)":"red", "LÍQUIDO (Tendencia)":"blue", "SÓLIDO (Hold)":"grey"},
-                             title="Cuanto más abajo y a la derecha, MEJOR.")
-            fig.add_hrect(y0=1.5, y1=4, line_width=0, fillcolor="red", opacity=0.1)
-            st.plotly_chart(fig, use_container_width=True)
-            
-        with c2:
-            st.subheader("📋 Ranking Oficial")
-            st.dataframe(df[["Ticker", "Ψ", "Estrategia"]], hide_index=True, use_container_width=True)
+    with c3:
+        st.markdown("### 🧠 GOBERNANZA ($\Psi$)")
+        fig_p = go.Figure(go.Indicator(
+            mode = "gauge+number", value = asset['Psi'],
+            gauge = {'axis': {'range': [0, 1]}, 'bar': {'color': "cyan"}}
+        ))
+        fig_p.update_layout(height=300, margin=dict(t=10,b=10))
+        st.plotly_chart(fig_p, use_container_width=True)
