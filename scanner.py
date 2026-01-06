@@ -1,6 +1,7 @@
 # ==============================================================================
-# FAROS v3.5 - TAI-ACF COMPACT DESIGN
+# FAROS v4.0 - QUANTITATIVE PRIME EDITION
 # Autor: Juan Arroyo | SG Consulting Group
+# Enfoque: Señales Claras, Rigor Matemático, UI Limpia
 # ==============================================================================
 
 import streamlit as st
@@ -9,136 +10,200 @@ import numpy as np
 import plotly.express as px
 import yfinance as yf
 
-# --- 1. ESTILO VISUAL (CLEAN & COMPACT) ---
-st.set_page_config(page_title="FAROS", page_icon="📡", layout="wide")
+# --- 1. INGENIERÍA VISUAL (High-End Fintech) ---
+st.set_page_config(page_title="FAROS | Quant Terminal", page_icon="📡", layout="wide")
 
 st.markdown("""
 <style>
-    .stApp { background-color: #0E1117; color: #E0E0E0; }
-    /* Tarjetas de activos más pequeñas y elegantes */
-    .asset-card {
-        background-color: #161B22;
-        border: 1px solid #30363D;
-        border-radius: 8px;
-        padding: 15px;
-        margin-bottom: 10px;
+    /* Fondo y Tipografía General */
+    .stApp { background-color: #080808; color: #E0E0E0; font-family: 'Inter', sans-serif; }
+    
+    /* Títulos */
+    h1, h2, h3 { font-family: 'Roboto Mono', monospace; font-weight: 600; letter-spacing: -0.5px; }
+    
+    /* TARJETA DE ACTIVO (Asset Card) - El núcleo del UX */
+    .quant-card {
+        background-color: #121212;
+        border-left: 5px solid #333;
+        border-radius: 4px;
+        padding: 18px;
+        margin-bottom: 12px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        transition: transform 0.2s;
     }
-    .phase-tag { font-weight: bold; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; }
-    /* Ajuste de textos */
-    h1 { font-size: 1.8rem !important; }
-    h3 { font-size: 1.2rem !important; }
-    p { font-size: 0.9rem !important; }
+    .quant-card:hover { transform: translateX(5px); }
+    
+    /* Badges de Señal */
+    .signal-badge {
+        padding: 4px 10px;
+        border-radius: 2px;
+        font-weight: 800;
+        font-size: 0.85rem;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+    }
+    
+    /* Métricas secundarias */
+    .metric-label { color: #666; font-size: 0.75rem; text-transform: uppercase; }
+    .metric-value { color: #FFF; font-size: 0.95rem; font-family: 'Roboto Mono', monospace; }
+    .quant-desc { color: #AAA; font-size: 0.9rem; margin-top: 8px; line-height: 1.4; border-top: 1px solid #222; padding-top: 8px;}
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. MOTOR DE CÁLCULO ---
-@st.cache_data(ttl=600)
-def get_live_data(tickers_input):
+# --- 2. MOTOR LÓGICO (QUANT CORE) ---
+@st.cache_data(ttl=300)
+def get_quant_data(tickers_input):
     tickers_list = [x.strip().upper() for x in tickers_input.split(',')]
     data_list = []
 
     for ticker in tickers_list:
         try:
+            # Descarga de datos (6 meses para robustez estadística)
             stock = yf.Ticker(ticker)
-            hist = stock.history(period="3mo")
+            hist = stock.history(period="6mo")
             
-            if len(hist) > 0:
+            if len(hist) > 20:
+                # --- MATEMÁTICA TAI-ACF ---
                 current_price = hist['Close'].iloc[-1]
+                
+                # 1. Entropía (H): Volatilidad normalizada (Z-Score)
                 returns = hist['Close'].pct_change().dropna()
-                volatility = returns.std() * np.sqrt(20) * 100 
-                z_entropy = (volatility - 5) / 2
+                volatility_20d = returns.std() * np.sqrt(20) * 100
+                avg_volatility = returns.std() * np.sqrt(252) * 100 # Anualizada
+                z_entropy = (volatility_20d - 5) / 2 # Baseline de mercado ~5%
                 
-                avg_vol = hist['Volume'].mean()
+                # 2. Liquidez (L): Momentum de Volumen
+                vol_sma_20 = hist['Volume'].rolling(20).mean().iloc[-1]
                 curr_vol = hist['Volume'].iloc[-1]
-                z_liquidity = np.log(curr_vol / avg_vol) if avg_vol > 0 else 0
+                z_liquidity = (curr_vol - vol_sma_20) / vol_sma_20 # % sobre la media
                 
-                # DEFINICIÓN DE ESTADOS Y DESCRIPCIONES HUMANAS
-                if z_entropy > 2.5: 
-                    fase = "GAS (CAOS)"
-                    desc = "Alta volatilidad e incertidumbre. Riesgo de pérdidas rápidas. El precio no respeta soportes."
-                    color = "#FF4B4B" # Rojo suave
-                elif z_liquidity < -1.0: 
-                    fase = "PLASMA (ILIQUIDO)"
-                    desc = "Poco volumen. Difícil entrar o salir sin mover el precio. Posible trampa."
-                    color = "#FFAA00" # Amarillo
-                elif z_liquidity > 0 and z_entropy < 2.0: 
-                    fase = "LÍQUIDO (ÓPTIMO)"
-                    desc = "Flujo constante de dinero institucional. Tendencia saludable y predecible."
-                    color = "#00CC96" # Verde menta
-                else: 
-                    fase = "SÓLIDO (ESTABLE)"
-                    desc = "Baja volatilidad. El precio se mueve lento o lateral. Seguro, pero con poco retorno explosivo."
-                    color = "#A6A6A6" # Gris
+                # 3. Tendencia (Trend): Posición respecto a medias
+                sma_50 = hist['Close'].rolling(50).mean().iloc[-1]
+                trend_strength = (current_price - sma_50) / sma_50
+                
+                # --- GENERADOR DE SEÑALES ---
+                signal = "HOLD"
+                color = "#888888" # Gris
+                narrative = "Activo en equilibrio termodinámico. Sin vectores de fuerza claros."
+                
+                # Lógica de Decisión Experta
+                if z_entropy > 2.0:
+                    signal = "VETO (RIESGO)"
+                    color = "#FF3333" # Rojo
+                    narrative = f"CRÍTICO: Ruptura de estructura. La entropía ({z_entropy:.1f}σ) indica comportamiento caótico (Fase Gaseosa). Alta probabilidad de drawdowns severos."
+                
+                elif z_liquidity < -0.3 and trend_strength < -0.05:
+                    signal = "SELL / EXIT"
+                    color = "#FF8800" # Naranja
+                    narrative = "Drenaje de liquidez detectado. El capital institucional está rotando fuera del activo. Trampa de valor potencial."
+                
+                elif trend_strength > 0.05 and z_entropy < 1.0:
+                    if z_liquidity > 0.2:
+                        signal = "STRONG BUY"
+                        color = "#00FF41" # Neon Green
+                        narrative = f"ALFA PURO: Convergencia de baja entropía y alta inyección de capital (+{z_liquidity*100:.0f}% vol). El activo está en Fase Líquida Expansiva."
+                    else:
+                        signal = "ACCUMULATE"
+                        color = "#00CCFF" # Cyan
+                        narrative = "Tendencia sólida con volatilidad controlada. Ideal para construir posición escalonada (DCA)."
 
                 data_list.append({
                     "Ticker": ticker,
-                    "Precio": current_price,
-                    "Fase": fase,
-                    "Desc": desc,
+                    "Price": current_price,
+                    "Signal": signal,
                     "Color": color,
-                    "Z_Entropia": z_entropy,
-                    "Z_Liquidez": z_liquidity
+                    "Narrative": narrative,
+                    "Entropy": z_entropy,
+                    "Liquidity": z_liquidity,
+                    "Trend": trend_strength * 100
                 })
-        except:
-            continue
+        except Exception:
+            pass
 
-    return pd.DataFrame(data_list)
+    # Ordenar por "Signal strength" (Strong Buy primero)
+    df = pd.DataFrame(data_list)
+    if not df.empty:
+        priority_map = {"STRONG BUY": 0, "ACCUMULATE": 1, "HOLD": 2, "SELL / EXIT": 3, "VETO (RIESGO)": 4}
+        df['Priority'] = df['Signal'].map(priority_map)
+        df = df.sort_values('Priority')
+    return df
 
-# --- 3. INTERFAZ DE USUARIO ---
+# --- 3. INTERFAZ DE USUARIO (UX) ---
+
+# Sidebar Limpio
 with st.sidebar:
-    st.header("📡 FAROS")
-    user_tickers = st.text_area("Activos:", value="PLTR, CVX, BTC-USD, SPY, TSLA", height=80)
-    st.caption("Escribe los tickers separados por coma.")
-    if st.button("Actualizar"): st.cache_data.clear()
+    st.title("📡 FAROS Q-SYS")
+    st.caption("Quantitative System for Asset Allocation")
+    st.markdown("---")
+    tickers = st.text_area("CARTERA DE VIGILANCIA:", 
+                           "PLTR, BTC-USD, CVX, TSLA, NVDA, SPY, AMTB", height=150)
+    if st.button("EJECUTAR ANÁLISIS ⚡", use_container_width=True):
+        st.cache_data.clear()
 
-# Cargar datos
-df = get_live_data(user_tickers)
+# Main Area
+st.title("Matriz de Decisión TAI-ACF")
+st.markdown("*Análisis de Termodinámica Financiera en Tiempo Real*")
+
+# Carga de Datos
+df = get_quant_data(tickers)
 
 if not df.empty:
-    st.subheader("Mapas de Estado TAI-ACF")
     
-    # --- DISEÑO DIVIDIDO (Izquierda: Radar Pequeño | Derecha: Lista Detallada) ---
-    col_izq, col_der = st.columns([1, 1.5]) # Proporción 40% / 60%
+    # 1. KPI RESUMEN (Metrics Row)
+    kpi1, kpi2, kpi3 = st.columns(3)
+    best_asset = df.iloc[0]
+    kpi1.metric("Mejor Oportunidad", best_asset['Ticker'], best_asset['Signal'])
+    kpi2.metric("Nivel de Entropía Global", "BAJO" if df['Entropy'].mean() < 1 else "ALTO", delta_color="inverse")
+    kpi3.metric("Activos Analizados", len(df))
     
-    with col_izq:
-        st.markdown("**Radar Termodinámico**")
-        # Radar más pequeño (Height 350px) y limpio
-        fig = px.scatter(df, x="Z_Entropia", y="Z_Liquidez", color="Fase", 
-                         hover_name="Ticker", size_max=15,
-                         color_discrete_map={
-                             "LÍQUIDO (ÓPTIMO)": "#00CC96", 
-                             "SÓLIDO (ESTABLE)": "#A6A6A6", 
-                             "GAS (CAOS)": "#FF4B4B", 
-                             "PLASMA (ILIQUIDO)": "#FFAA00"
-                         })
-        fig.update_layout(
-            template="plotly_dark",
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            height=350, # Altura reducida
-            margin=dict(l=0, r=0, t=0, b=0),
-            xaxis=dict(showgrid=False, title="Riesgo (Entropía)"),
-            yaxis=dict(showgrid=False, title="Volumen (Liquidez)"),
-            legend=dict(orientation="h", y=-0.2)
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    st.markdown("---")
 
-    with col_der:
-        st.markdown("**Diagnóstico por Activo**")
-        # Lista de tarjetas compactas
+    # 2. LISTA DE ACCIÓN (Action List) - Aquí está el UX mejorado
+    # Usamos columnas para Radar (Pequeño) vs Lista (Grande)
+    
+    col_list, col_radar = st.columns([2, 1])
+    
+    with col_radar:
+        st.markdown("###### 🗺️ RADAR DE FASES")
+        fig = px.scatter(df, x="Entropy", y="Liquidity", color="Signal", text="Ticker",
+                         color_discrete_map={
+                             "STRONG BUY": "#00FF41", "ACCUMULATE": "#00CCFF",
+                             "HOLD": "#888888", "SELL / EXIT": "#FF8800", "VETO (RIESGO)": "#FF3333"
+                         })
+        fig.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=0,b=0),
+                          xaxis_title="Caos (H)", yaxis_title="Flujo (L)", showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.info("💡 **Guía Rápida:** Buscamos activos en la zona superior izquierda (Alto Flujo, Bajo Caos).")
+
+    with col_list:
+        st.markdown("###### 📋 REPORTE DE EJECUCIÓN")
+        
         for index, row in df.iterrows():
-            with st.container():
-                # HTML personalizado para diseño compacto
-                st.markdown(f"""
-                <div class="asset-card" style="border-left: 4px solid {row['Color']};">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <h3 style="margin:0; color:white;">{row['Ticker']} <span style="font-size:0.7em; color:#888;">${row['Precio']:.2f}</span></h3>
-                        <span class="phase-tag" style="background-color:{row['Color']}20; color:{row['Color']}; border:1px solid {row['Color']};">{row['Fase']}</span>
+            # Renderizado HTML de la tarjeta
+            st.markdown(f"""
+            <div class="quant-card" style="border-left-color: {row['Color']};">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <span style="font-size:1.4rem; font-weight:700; color:#FFF;">{row['Ticker']}</span>
+                        <span style="font-size:1rem; color:#888; margin-left:10px;">${row['Price']:.2f}</span>
                     </div>
-                    <p style="margin-top:5px; margin-bottom:0; color:#BBB; font-size:0.85rem;">
-                        <i>"{row['Desc']}"</i>
-                    </p>
+                    <div class="signal-badge" style="background-color:{row['Color']}20; color:{row['Color']}; border:1px solid {row['Color']};">
+                        {row['Signal']}
+                    </div>
                 </div>
-                """, unsafe_allow_html=True)
+                
+                <div style="display:flex; gap: 20px; margin-top:10px;">
+                    <div><span class="metric-label">ENTROPÍA (σ)</span><br><span class="metric-value">{row['Entropy']:.2f}</span></div>
+                    <div><span class="metric-label">MOMENTUM ($)</span><br><span class="metric-value">{row['Liquidity']*100:+.1f}%</span></div>
+                    <div><span class="metric-label">TENDENCIA</span><br><span class="metric-value">{row['Trend']:+.1f}%</span></div>
+                </div>
+                
+                <div class="quant-desc">
+                    ➤ <b>Análisis:</b> {row['Narrative']}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
 else:
-    st.info("Esperando datos... revisa los tickers en la barra lateral.")
+    st.warning("Inicializando sistemas... Por favor espera o verifica los tickers.")
