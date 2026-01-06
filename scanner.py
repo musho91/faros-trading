@@ -1,12 +1,6 @@
 # ==============================================================================
-# FAROS v17.0 - THE MASTER SUITE (FULL INTEGRATION)
-# Autor: Juan Arroyo | SG Consulting Group
-# Módulos: 
-#   1. Observatorio Macro (Países/Divisas)
-#   2. Gestión de Portafolios (Correlación/Riesgo)
-#   3. Scanner Mercado (Señales/Psi)
-#   4. Backtest Lab (Fases Termodinámicas)
-#   5. Oráculo Futuro (Proyección Estocástica Estable)
+# FAROS v17.1 - MASTER SUITE (FINAL BRANDING)
+# Autor: Juan Arroyo | SG Consulting Group & Emporium
 # ==============================================================================
 
 import streamlit as st
@@ -19,7 +13,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 
 # --- CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="FAROS | Institutional", page_icon="🏛️", layout="wide")
+st.set_page_config(page_title="FAROS | Institutional", page_icon="📡", layout="wide")
 st.markdown("""
 <style>
     .stApp { background-color: #FFFFFF; color: #111; }
@@ -306,7 +300,11 @@ def run_oracle_sim(ticker, days, risk_tolerance):
 # ==============================================================================
 
 with st.sidebar:
-    st.header("🏛️ SG CAPITAL | FAROS")
+    # --- CAMBIO DE BRANDING SOLICITADO ---
+    st.title("📡 FAROS")
+    st.caption("**By SG Consulting Group y Emporium**")
+    # -------------------------------------
+    
     app_mode = st.radio("SISTEMA:", [
         "🌎 MACRO ECONOMÍA", 
         "💼 GESTIÓN PORTAFOLIOS", 
