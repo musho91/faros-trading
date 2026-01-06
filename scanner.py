@@ -290,16 +290,63 @@ elif app_mode == "BACKTEST":
             fig2.add_trace(go.Scatter(x=res.index, y=res['Eq_BH'], name='Hold', line=dict(color='gray', dash='dot')))
             st.plotly_chart(fig2, use_container_width=True)
 
+# --- MÓDULO 3: ORÁCULO (Mejorado con Explicación de Escenarios) ---
 elif app_mode == "ORÁCULO":
-    # (Misma UI Oráculo v13)
-    o_tick = st.text_input("Activo:", "QBTS").upper()
-    o_days = st.slider("Días:", 30, 365, 90)
-    if st.button("Proyectar"):
+    st.title("Proyección de Teoría TAI")
+    st.caption("Simulación de escenarios futuros basada en la Entropía actual.")
+    
+    o_tick = st.text_input("Activo a Proyectar:", "QBTS").upper()
+    o_days = st.slider("Días a Futuro:", 30, 365, 90)
+    
+    if st.button("Consultar Oráculo"):
         paths, proj = run_oracle_sim(o_tick, o_days, risk_sigma)
+        
         if paths is not None:
-            if proj > risk_sigma: st.error(f"⚠️ Alerta Gas: {proj:.1f}σ")
-            else: st.success(f"✅ Estable: {proj:.1f}σ")
+            # CÁLCULO DE ESCENARIOS (Percentiles)
+            final_prices = paths[-1]
+            p95 = np.percentile(final_prices, 95) # Optimista
+            p50 = np.percentile(final_prices, 50) # Base
+            p05 = np.percentile(final_prices, 5)  # Pesimista
+            start_price = paths[0][0]
+            
+            # --- 1. TARJETAS DE MÉTRICAS ---
+            k1, k2, k3 = st.columns(3)
+            k1.metric("🟢 Optimista (95%)", f"${p95:.2f}", f"{((p95/start_price)-1)*100:.1f}%")
+            k2.metric("🔵 Escenario Base", f"${p50:.2f}", f"Trend")
+            k3.metric("🔴 Pesimista (5%)", f"${p05:.2f}", f"{((p05/start_price)-1)*100:.1f}%")
+            
+            # --- 2. EXPLICACIÓN DE ESCENARIOS (NUEVO) ---
+            st.markdown(f"""
+            <div style="background-color:#F8F9FA; padding:15px; border-radius:8px; border:1px solid #eee; margin-top:10px; margin-bottom:20px;">
+                <h4 style="margin-top:0;">📊 Interpretación de Escenarios ({o_days} días)</h4>
+                <p style="font-size:0.95rem;">
+                    El modelo ha simulado <b>200 futuros alternativos</b> basados en la volatilidad actual del activo.
+                </p>
+                <ul style="font-size:0.9rem;">
+                    <li><b>Techo Teórico (${p95:.2f}):</b> Solo hay un <b>5% de probabilidad</b> de superar este precio. Si llega aquí, es un rendimiento excepcional ("Moonshot").</li>
+                    <li><b>Camino Probable (${p50:.2f}):</b> Es la mediana estadística. Si la entropía se mantiene constante, el precio orbitará esta zona.</li>
+                    <li><b>Suelo de Riesgo (${p05:.2f}):</b> En el peor 5% de los casos simulados (Cisne Negro), el precio cayó hasta aquí. <b>Este es tu riesgo máximo estimado.</b></li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # --- 3. DIAGNÓSTICO DE ENTROPÍA ---
+            if proj > risk_sigma:
+                st.error(f"⚠️ **ALERTA DE FASE GASEOSA:** La volatilidad proyectada ({proj:.1f}σ) supera tu límite ({risk_sigma}σ). El abanico de precios es demasiado amplio (Riesgo Alto).")
+            elif proj > 1.5:
+                st.warning(f"⚡ **ALERTA DE ALTA ENERGÍA:** Entropía proyectada ({proj:.1f}σ). Se espera movimiento fuerte (Growth o Caída).")
+            else:
+                st.success(f"✅ **ESTABILIDAD:** Entropía proyectada ({proj:.1f}σ). El activo se comportará de manera predecible.")
+
+            # --- 4. GRÁFICO ---
             fig = go.Figure()
-            for i in range(50): fig.add_trace(go.Scatter(y=paths[:, i], mode='lines', line=dict(color='gray', width=0.5), opacity=0.1, showlegend=False))
-            fig.add_trace(go.Scatter(y=np.median(paths, axis=1), mode='lines', name='Base', line=dict(color='blue', width=2)))
+            # 50 caminos aleatorios (Fondo)
+            for i in range(50): 
+                fig.add_trace(go.Scatter(y=paths[:, i], mode='lines', line=dict(color='gray', width=0.5), opacity=0.1, showlegend=False))
+            
+            # Líneas Clave
+            fig.add_trace(go.Scatter(y=np.percentile(paths, 95, axis=1), mode='lines', name='Optimista (95%)', line=dict(color='green', width=2, dash='dash')))
+            fig.add_trace(go.Scatter(y=np.percentile(paths, 50, axis=1), mode='lines', name='Base (Mediana)', line=dict(color='blue', width=3)))
+            fig.add_trace(go.Scatter(y=np.percentile(paths, 5, axis=1), mode='lines', name='Pesimista (5%)', line=dict(color='red', width=2, dash='dash')))
+            
             st.plotly_chart(fig, use_container_width=True)
