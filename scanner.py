@@ -109,55 +109,81 @@ def get_live_data(tickers_input, window_cfg):
         df = df.sort_values('P')
     return df
 
+# --- REEMPLAZA SOLO LA FUNCIÓN run_backtest CON ESTO ---
+
 def run_backtest(ticker, start_date, initial_capital=10000):
     try:
-        # Descarga de datos
-        data = yf.download(ticker, start=start_date, progress=False)
-        if len(data) < 50: return None
+        # 1. Limpieza del Ticker (evita errores por espacios)
+        ticker = ticker.strip().upper()
         
-        df = data.copy()
-        df = df[['Close', 'Volume']] # Limpieza simple
+        # 2. Descarga de datos
+        stock = yf.Ticker(ticker)
+        df = stock.history(start=start_date)
         
-        # --- CÁLCULO HISTÓRICO DE INDICADORES (Vectorizado) ---
-        # 1. Tendencia (SMA 50)
+        # 3. Diagnóstico de errores comunes
+        if df.empty:
+            st.error(f"⚠️ Error: No se encontraron datos para '{ticker}'.")
+            st.caption("Consejo: Verifica que el ticker sea correcto (ej: PLTR, BTC-USD, SPY) y que no tengas bloqueos de red.")
+            return None
+            
+        if len(df) < 50:
+            st.error(f"⚠️ Datos insuficientes: Se descargaron solo {len(df)} días.")
+            st.caption("Solución: Selecciona una 'Fecha Inicio' más antigua (al menos 3 meses atrás).")
+            return None
+        
+        # 4. Limpieza técnica (Eliminar zona horaria para evitar conflictos)
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
+
+        # Seleccionar solo lo necesario
+        df = df[['Close', 'Volume']].copy()
+        
+        # --- CÁLCULOS (MOTOR TAI-ACF) ---
+        
+        # Tendencia (SMA 50)
         df['SMA_50'] = df['Close'].rolling(window=50).mean()
         df['Trend_Str'] = (df['Close'] - df['SMA_50']) / df['SMA_50']
         
-        # 2. Entropía (Volatilidad Anualizada 20d)
+        # Entropía (Volatilidad Anualizada)
         df['Returns'] = df['Close'].pct_change()
         df['Vol_Ann'] = df['Returns'].rolling(window=20).std() * np.sqrt(252) * 100
         df['Z_Entropy'] = (df['Vol_Ann'] - 20) / 15
         
-        # 3. Liquidez (Volumen relativo 20d)
+        # Liquidez
         df['Vol_SMA'] = df['Volume'].rolling(window=20).mean()
-        df['Z_Liq'] = (df['Volume'] - df['Vol_SMA']) / df['Vol_SMA']
         
-        # --- MOTOR DE ESTRATEGIA (REGLAS DE BACKTEST) ---
-        # 1 = Comprado (Dentro), 0 = Cash (Fuera)
-        df['Position'] = 0 
+        # ESTRATEGIA:
+        # 1. Comprar si: Tendencia > 2% Y (Entropía Baja O Tendencia Muy Fuerte > 10%)
+        # 2. Vender si: Tendencia rota (<-5%) O Riesgo Extremo (>3 sigma)
         
-        # Regla de Compra: Tendencia Positiva Y Entropía Controlada (< 2.5) 
-        # (O Excepción de Growth: Tendencia > 10%)
-        buy_condition = (df['Trend_Str'] > 0.02) & ( (df['Z_Entropy'] < 2.0) | (df['Trend_Str'] > 0.10) )
+        # Inicializar vectores
+        df['Signal'] = 0
         
-        # Regla de Venta: Tendencia Negativa O Riesgo Extremo
-        sell_condition = (df['Trend_Str'] < -0.05) | ( (df['Z_Entropy'] > 3.0) & (df['Trend_Str'] < 0.05) )
+        buy_cond = (df['Trend_Str'] > 0.02) & ( (df['Z_Entropy'] < 2.0) | (df['Trend_Str'] > 0.10) )
+        sell_cond = (df['Trend_Str'] < -0.05) | ( (df['Z_Entropy'] > 3.0) & (df['Trend_Str'] < 0.05) )
         
-        # Asignación de señales
-        df.loc[buy_condition, 'Signal'] = 1
-        df.loc[sell_condition, 'Signal'] = 0
-        df['Signal'] = df['Signal'].ffill().fillna(0) # Mantiene la posición hasta nueva señal
+        # Lógica vectorial rápida
+        df.loc[buy_cond, 'Signal'] = 1
+        df.loc[sell_cond, 'Signal'] = 0
         
-        # --- CÁLCULO DE RENDIMIENTOS ---
+        # Rellenar (Hold): Si no hay señal nueva, mantener la anterior
+        df['Signal'] = df['Signal'].replace(to_replace=0, method='ffill') 
+        # Nota: Si pandas es muy nuevo, replace/method puede fallar, usamos ffill directo:
+        df['Signal'] = df['Signal'].ffill().fillna(0)
+        
+        # --- RESULTADOS ---
         df['Market_Return'] = df['Close'].pct_change()
-        df['Strategy_Return'] = df['Market_Return'] * df['Signal'].shift(1) # Lag de 1 día para no operar con info futura
+        df['Strategy_Return'] = df['Market_Return'] * df['Signal'].shift(1)
         
-        # Equity Curve (Capital en el tiempo)
+        df.dropna(inplace=True)
+        
         df['Equity_BuyHold'] = initial_capital * (1 + df['Market_Return']).cumprod()
         df['Equity_Strategy'] = initial_capital * (1 + df['Strategy_Return']).cumprod()
         
         return df
+        
     except Exception as e:
+        st.error(f"Error Técnico: {str(e)}")
         return None
 
 # ==============================================================================
@@ -300,3 +326,4 @@ elif app_mode == "🧪 BACKTESTING HISTÓRICO":
                 
         else:
             st.error("No se pudieron descargar datos o el rango de fechas es muy corto.")
+
