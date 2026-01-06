@@ -290,63 +290,95 @@ elif app_mode == "BACKTEST":
             fig2.add_trace(go.Scatter(x=res.index, y=res['Eq_BH'], name='Hold', line=dict(color='gray', dash='dot')))
             st.plotly_chart(fig2, use_container_width=True)
 
-# --- MÓDULO 3: ORÁCULO (Mejorado con Explicación de Escenarios) ---
+# --- MÓDULO 3: ORÁCULO (CON FUTURE SCORE) ---
 elif app_mode == "ORÁCULO":
     st.title("Proyección de Teoría TAI")
-    st.caption("Simulación de escenarios futuros basada en la Entropía actual.")
+    st.caption("Simulación de escenarios futuros y Cálculo de Potencial (Phi).")
     
-    o_tick = st.text_input("Activo a Proyectar:", "QBTS").upper()
-    o_days = st.slider("Días a Futuro:", 30, 365, 90)
+    # Inputs
+    c_tick, c_days = st.columns([1, 1])
+    o_tick = c_tick.text_input("Activo a Proyectar:", "PLTR").upper()
+    o_days = c_days.slider("Horizonte de Proyección (Días):", 30, 365, 90)
     
     if st.button("Consultar Oráculo"):
-        paths, proj = run_oracle_sim(o_tick, o_days, risk_sigma)
+        paths, proj_entropy = run_oracle_sim(o_tick, o_days, risk_sigma)
         
         if paths is not None:
-            # CÁLCULO DE ESCENARIOS (Percentiles)
-            final_prices = paths[-1]
-            p95 = np.percentile(final_prices, 95) # Optimista
-            p50 = np.percentile(final_prices, 50) # Base
-            p05 = np.percentile(final_prices, 5)  # Pesimista
+            # 1. CÁLCULO DE ESCENARIOS (Matemática Pura)
             start_price = paths[0][0]
+            final_prices = paths[-1]
             
-            # --- 1. TARJETAS DE MÉTRICAS ---
-            k1, k2, k3 = st.columns(3)
-            k1.metric("🟢 Optimista (95%)", f"${p95:.2f}", f"{((p95/start_price)-1)*100:.1f}%")
-            k2.metric("🔵 Escenario Base", f"${p50:.2f}", f"Trend")
-            k3.metric("🔴 Pesimista (5%)", f"${p05:.2f}", f"{((p05/start_price)-1)*100:.1f}%")
+            p95 = np.percentile(final_prices, 95) # Techo Optimista
+            p50 = np.percentile(final_prices, 50) # Mediana
+            p05 = np.percentile(final_prices, 5)  # Suelo Pesimista
             
-            # --- 2. EXPLICACIÓN DE ESCENARIOS (NUEVO) ---
+            # 2. CÁLCULO DEL "FUTURE SCORE" (Phi - Φ)
+            # Factor A: Probabilidad de Ganancia (% de caminos que terminan en verde)
+            win_rate = np.mean(final_prices > start_price) # Ej: 0.65 (65%)
+            
+            # Factor B: Asimetría (Reward vs Risk)
+            # ¿Cuánto puedo ganar vs cuánto puedo perder?
+            upside = (p95 - start_price) / start_price
+            downside = abs((p05 - start_price) / start_price)
+            risk_reward_ratio = upside / downside if downside > 0 else 0
+            
+            # Factor C: Penalización por Entropía excesiva
+            entropy_penalty = 0
+            if proj_entropy > risk_sigma: entropy_penalty = 20
+            
+            # FÓRMULA DE POTENCIAL (0 a 100)
+            # Base: Win Rate * 50 puntos
+            # + Asimetría * 20 puntos (tope 40)
+            # - Penalización
+            phi_score = (win_rate * 60) + (min(risk_reward_ratio, 3) * 10) - entropy_penalty
+            phi_score = max(0, min(100, phi_score)) # Normalizar 0-100
+            
+            # Color del Score
+            phi_color = "green" if phi_score > 70 else "orange" if phi_score > 40 else "red"
+            
+            # --- INTERFAZ DE RESULTADOS ---
+            
+            # HEADER: El Score Phi
             st.markdown(f"""
-            <div style="background-color:#F8F9FA; padding:15px; border-radius:8px; border:1px solid #eee; margin-top:10px; margin-bottom:20px;">
-                <h4 style="margin-top:0;">📊 Interpretación de Escenarios ({o_days} días)</h4>
-                <p style="font-size:0.95rem;">
-                    El modelo ha simulado <b>200 futuros alternativos</b> basados en la volatilidad actual del activo.
-                </p>
-                <ul style="font-size:0.9rem;">
-                    <li><b>Techo Teórico (${p95:.2f}):</b> Solo hay un <b>5% de probabilidad</b> de superar este precio. Si llega aquí, es un rendimiento excepcional ("Moonshot").</li>
-                    <li><b>Camino Probable (${p50:.2f}):</b> Es la mediana estadística. Si la entropía se mantiene constante, el precio orbitará esta zona.</li>
-                    <li><b>Suelo de Riesgo (${p05:.2f}):</b> En el peor 5% de los casos simulados (Cisne Negro), el precio cayó hasta aquí. <b>Este es tu riesgo máximo estimado.</b></li>
-                </ul>
+            <div style="text-align:center; margin-bottom:20px; padding:10px; border:1px solid #ddd; border-radius:10px; background-color:#f9f9f9;">
+                <h2 style="margin:0; color:#333;">POTENCIAL FUTURO (Φ)</h2>
+                <h1 style="margin:0; font-size:3.5rem; color:{phi_color};">{phi_score:.0f}/100</h1>
+                <p style="color:#666;">Probabilidad de Éxito: <b>{win_rate*100:.0f}%</b> | Ratio Riesgo/Beneficio: <b>{risk_reward_ratio:.1f}x</b></p>
             </div>
             """, unsafe_allow_html=True)
+            
+            # Tarjetas de Precios
+            k1, k2, k3 = st.columns(3)
+            k1.metric("🟢 Techo (Optimista)", f"${p95:.2f}", f"+{((p95/start_price)-1)*100:.1f}%")
+            k2.metric("🔵 Mediana (Base)", f"${p50:.2f}", f"{((p50/start_price)-1)*100:.1f}%")
+            k3.metric("🔴 Suelo (Riesgo)", f"${p05:.2f}", f"{((p05/start_price)-1)*100:.1f}%")
 
-            # --- 3. DIAGNÓSTICO DE ENTROPÍA ---
-            if proj > risk_sigma:
-                st.error(f"⚠️ **ALERTA DE FASE GASEOSA:** La volatilidad proyectada ({proj:.1f}σ) supera tu límite ({risk_sigma}σ). El abanico de precios es demasiado amplio (Riesgo Alto).")
-            elif proj > 1.5:
-                st.warning(f"⚡ **ALERTA DE ALTA ENERGÍA:** Entropía proyectada ({proj:.1f}σ). Se espera movimiento fuerte (Growth o Caída).")
+            # Diagnóstico Escrito
+            if phi_score > 75:
+                st.success("💎 **POTENCIAL ALFA:** La simulación muestra una alta probabilidad de ganancia con un riesgo asimétrico a tu favor.")
+            elif phi_score > 40:
+                st.info("⚖️ **POTENCIAL NEUTRO:** El activo tiene posibilidades, pero el riesgo de caída es considerable.")
             else:
-                st.success(f"✅ **ESTABILIDAD:** Entropía proyectada ({proj:.1f}σ). El activo se comportará de manera predecible.")
-
-            # --- 4. GRÁFICO ---
+                st.error("💣 **POTENCIAL NEGATIVO:** Las probabilidades matemáticas están en tu contra. El riesgo supera al beneficio.")
+            
+            # Gráfico de Abanico
             fig = go.Figure()
             # 50 caminos aleatorios (Fondo)
             for i in range(50): 
                 fig.add_trace(go.Scatter(y=paths[:, i], mode='lines', line=dict(color='gray', width=0.5), opacity=0.1, showlegend=False))
             
             # Líneas Clave
-            fig.add_trace(go.Scatter(y=np.percentile(paths, 95, axis=1), mode='lines', name='Optimista (95%)', line=dict(color='green', width=2, dash='dash')))
-            fig.add_trace(go.Scatter(y=np.percentile(paths, 50, axis=1), mode='lines', name='Base (Mediana)', line=dict(color='blue', width=3)))
-            fig.add_trace(go.Scatter(y=np.percentile(paths, 5, axis=1), mode='lines', name='Pesimista (5%)', line=dict(color='red', width=2, dash='dash')))
+            fig.add_trace(go.Scatter(y=np.percentile(paths, 95, axis=1), mode='lines', name='Optimista', line=dict(color='green', width=2, dash='dash')))
+            fig.add_trace(go.Scatter(y=np.percentile(paths, 50, axis=1), mode='lines', name='Mediana', line=dict(color='blue', width=3)))
+            fig.add_trace(go.Scatter(y=np.percentile(paths, 5, axis=1), mode='lines', name='Pesimista', line=dict(color='red', width=2, dash='dash')))
             
             st.plotly_chart(fig, use_container_width=True)
+            
+            # Explicación Técnica (Desplegable)
+            with st.expander("🧮 Ver desglose de la Fórmula Φ"):
+                st.write(f"""
+                **Cálculo de Φ (Phi):**
+                1. **Probabilidad de Ganancia ({win_rate*100:.0f}%):** De los 200 futuros simulados, ¿cuántos terminaron arriba del precio actual? *(Aporta hasta 60 pts)*
+                2. **Asimetría ({risk_reward_ratio:.1f}x):** Por cada dólar que arriesgas a la baja, ¿cuántos puedes ganar al alza? *(Aporta hasta 30 pts)*
+                3. **Penalización de Entropía:** Si la volatilidad proyectada es peligrosa, restamos puntos. *(Descuento actual: -{entropy_penalty} pts)*
+                """)
