@@ -1,7 +1,7 @@
 # ==============================================================================
-# FAROS v9.0 - TIME MACHINE & THERMODYNAMIC PHASES
+# FAROS v10.0 - DATA LAB EDITION (VALIDATION SUITE)
 # Autor: Juan Arroyo | SG Consulting Group
-# Feature: Backtesting con Rango de Fechas y Visualización de Estados (Gas/Líquido)
+# Feature: Desglose detallado de cálculos (Raw Data) para validación teórica.
 # ==============================================================================
 
 import streamlit as st
@@ -10,260 +10,207 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 import yfinance as yf
-from datetime import datetime, timedelta
 
-# CONFIGURACIÓN
-st.set_page_config(page_title="FAROS | Time Machine", page_icon="📡", layout="wide")
-st.markdown("""
-<style>
-    .stApp { background-color: #FFFFFF; color: #111; }
-    h1, h2, h3 { color: #000 !important; }
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="FAROS | Data Lab", page_icon="📡", layout="wide")
+st.markdown("""<style>.stApp { background-color: #FFFFFF; color: #111; } h1,h2,h3{color:#000!important;} 
+.stExpander { border: 1px solid #eee; border-radius: 5px; background-color: #f9f9f9; }</style>""", unsafe_allow_html=True)
 
-# ==============================================================================
-# 🧠 MÓDULO LÓGICO (CORE)
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# CORE LOGIC (Incluye extracción de DATOS CRUDOS para validación)
+# ------------------------------------------------------------------------------
 
 @st.cache_data(ttl=300)
-def get_live_data(tickers_input, window_cfg):
-    # (Misma función del Scanner que ya funciona bien)
+def get_live_data(tickers_input, window_cfg, risk_tolerance):
     tickers_list = [x.strip().upper() for x in tickers_input.split(',')]
     data_list = []
-    w_calc = window_cfg['volatility']
-    w_trend = window_cfg['trend']
-    period_dl = window_cfg['download']
+    entropy_limit = risk_tolerance 
 
     for ticker in tickers_list:
         try:
             stock = yf.Ticker(ticker)
-            hist = stock.history(period=period_dl)
-            if len(hist) > w_trend:
+            hist = stock.history(period=window_cfg['download'])
+            if len(hist) > window_cfg['trend']:
                 current_price = hist['Close'].iloc[-1]
                 returns = hist['Close'].pct_change().dropna()
-                subset_returns = returns.tail(w_calc)
-                vol_annualized = subset_returns.std() * np.sqrt(252) * 100 if len(subset_returns) > 1 else 0
-                z_entropy = (vol_annualized - 20) / 15 
-                vol_avg = hist['Volume'].rolling(w_calc).mean().iloc[-1]
-                curr_vol = hist['Volume'].iloc[-1]
-                z_liquidity = (curr_vol - vol_avg) / vol_avg if vol_avg > 0 else 0
-                sma_trend = hist['Close'].rolling(w_trend).mean().iloc[-1]
-                trend_strength = (current_price - sma_trend) / sma_trend
                 
+                # --- CÁLCULOS FÍSICOS (CRDOS) ---
+                
+                # 1. ENTROPÍA (Volatilidad)
+                subset = returns.tail(window_cfg['volatility'])
+                # Dato Crudo: Volatilidad Anualizada (%)
+                raw_volatility = subset.std() * np.sqrt(252) * 100 if len(subset) > 1 else 0
+                # Dato TAI: Z-Score
+                z_entropy = (raw_volatility - 20) / 15 
+                
+                # 2. LIQUIDEZ (Volumen)
+                # Dato Crudo: Volumen Promedio vs Actual
+                vol_avg = hist['Volume'].rolling(window_cfg['volatility']).mean().iloc[-1]
+                curr_vol = hist['Volume'].iloc[-1]
+                # Dato TAI: Ratio relativo
+                raw_vol_ratio = (curr_vol / vol_avg) if vol_avg > 0 else 0
+                z_liq = (curr_vol - vol_avg) / vol_avg if vol_avg > 0 else 0
+                
+                # 3. GOBERNANZA (Tendencia)
+                # Dato Crudo: Media Móvil
+                sma_val = hist['Close'].rolling(window_cfg['trend']).mean().iloc[-1]
+                # Dato TAI: Distancia %
+                trend_pct = (current_price - sma_val) / sma_val
+                
+                # --- ÁRBOL DE DECISIÓN ---
                 signal, category, narrative = "MANTENER", "neutral", "Consolidación."
-                if z_entropy > 2.0:
-                    if trend_strength > 0.10: 
-                        signal = "GROWTH AGRESIVO"
+                
+                if z_entropy > entropy_limit:
+                    if trend_pct > 0.15: 
+                        signal = "GROWTH EXTREMO"
                         category = "warning"
-                        narrative = f"⚡ Tendencia fuerte (+{trend_strength*100:.1f}%) supera volatilidad."
+                        narrative = f"⚡ Momentum supera volatilidad ({raw_volatility:.0f}% anual)."
                     else:
-                        signal = "RIESGO / GAS"
+                        signal = "GAS / RIESGO"
                         category = "danger"
-                        narrative = f"⚠️ Fase Gaseosa ({z_entropy:.1f}σ). Alta probabilidad de crash."
-                elif trend_strength > 0.02:
-                    if z_liquidity > 0.10:
-                        signal = "FASE LÍQUIDA"
+                        narrative = f"⚠️ Fase Gaseosa. Volatilidad {raw_volatility:.0f}% excede límite."
+                elif trend_pct > 0.02:
+                    if z_liq > 0.10:
+                        signal = "COMPRA FUERTE"
                         category = "success"
-                        narrative = f"🚀 Estructura ordenada + Flujo (+{z_liquidity*100:.0f}%)."
+                        narrative = "🚀 Fase Líquida Óptima."
                     else:
                         signal = "ACUMULAR"
                         category = "info"
-                        narrative = "📈 Tendencia sana (Sólido)."
-                elif trend_strength < -0.05:
+                        narrative = "📈 Tendencia sana."
+                elif trend_pct < -0.05:
                     signal = "SALIDA"
                     category = "warning"
-                    narrative = "📉 Tendencia rota."
+                    narrative = "📉 Rotura de tendencia."
 
                 data_list.append({
                     "Ticker": ticker, "Price": current_price, "Signal": signal, 
                     "Category": category, "Narrative": narrative,
-                    "Entropy": z_entropy, "Liquidity": z_liquidity, "Trend": trend_strength * 100
+                    # Datos TAI (Scores)
+                    "Entropy": z_entropy, "Liquidity": z_liq, "Trend": trend_pct * 100,
+                    # Datos LAB (Raw)
+                    "Raw_Vol": raw_volatility, "Raw_Vol_Ratio": raw_vol_ratio, "SMA_Price": sma_val
                 })
         except: pass
-    df = pd.DataFrame(data_list)
-    if not df.empty:
-        prio = {"success": 0, "info": 1, "warning": 2, "neutral": 3, "danger": 4}
-        df['P'] = df['Category'].map(prio)
-        df = df.sort_values('P')
-    return df
+    return pd.DataFrame(data_list).sort_values('Category', ascending=False) if data_list else pd.DataFrame()
 
-# --- FUNCIÓN DE BACKTESTING AVANZADA (CON FASES) ---
-def run_backtest(ticker, start_date, end_date, initial_capital=10000):
+# BACKTESTING
+def run_backtest(ticker, start, end, capital, risk_tolerance):
     try:
-        ticker = ticker.strip().upper()
-        stock = yf.Ticker(ticker)
-        # Descarga con fecha fin
-        df = stock.history(start=start_date, end=end_date)
+        df = yf.Ticker(ticker.strip().upper()).history(start=start, end=end)
+        if df.empty: return None
+        if df.index.tz: df.index = df.index.tz_localize(None)
         
-        if df.empty or len(df) < 50:
-            st.error("Datos insuficientes para el rango seleccionado.")
-            return None
-        
-        if df.index.tz is not None: df.index = df.index.tz_localize(None)
-        df = df[['Close', 'Volume']].copy()
-        
-        # --- CÁLCULO DE FÍSICA ---
-        # 1. Tendencia
-        df['SMA_50'] = df['Close'].rolling(window=50).mean()
-        df['Trend_Str'] = (df['Close'] - df['SMA_50']) / df['SMA_50']
-        
-        # 2. Entropía (Z_H)
-        df['Returns'] = df['Close'].pct_change()
-        df['Vol_Ann'] = df['Returns'].rolling(window=20).std() * np.sqrt(252) * 100
+        df['SMA'] = df['Close'].rolling(50).mean()
+        df['Trend'] = (df['Close'] - df['SMA']) / df['SMA']
+        df['Ret'] = df['Close'].pct_change()
+        df['Vol_Ann'] = df['Ret'].rolling(20).std() * np.sqrt(252) * 100
         df['Z_Entropy'] = (df['Vol_Ann'] - 20) / 15
         
-        # --- LÓGICA DE FASES (Thermodynamic Cycle) ---
-        # Definimos el estado para pintar el gráfico después
-        conditions = [
-            (df['Z_Entropy'] > 2.5) & (df['Trend_Str'] < 0.10), # GAS (Crash/Riesgo)
-            (df['Trend_Str'] > 0.02) & (df['Z_Entropy'] < 2.0)  # LÍQUIDO (Growth)
+        entropy_limit = risk_tolerance
+        conds = [
+            (df['Z_Entropy'] > entropy_limit) & (df['Trend'] < 0.10), 
+            (df['Trend'] > 0) & (df['Z_Entropy'] <= entropy_limit)
         ]
-        choices = ['GAS', 'LIQUID']
-        df['Phase'] = np.select(conditions, choices, default='SOLID')
+        df['Phase'] = np.select(conds, ['GAS', 'LIQUID'], default='SOLID')
         
-        # --- ESTRATEGIA ---
         df['Signal'] = 0
-        
-        # REGLA 1: PROTECCIÓN (COVID RULE)
-        # Si entramos en GAS, Venta Inmediata (Cash)
-        # REGLA 2: CRECIMIENTO
-        # Si estamos en LIQUID o SOLID (con tendencia positiva), Compramos.
-        
-        buy_signal = (df['Phase'] == 'LIQUID') | ( (df['Phase'] == 'SOLID') & (df['Trend_Str'] > 0) )
-        crash_signal = (df['Phase'] == 'GAS') | (df['Trend_Str'] < -0.05)
-        
-        df.loc[buy_signal, 'Signal'] = 1
-        df.loc[crash_signal, 'Signal'] = 0
-        
-        # Mantener posición previa (ffill)
+        df.loc[(df['Phase'] == 'LIQUID') | ((df['Phase'] == 'SOLID') & (df['Trend'] > 0)), 'Signal'] = 1
+        crash_cond = (df['Phase'] == 'GAS')
+        trend_break = (df['Trend'] < -0.05)
+        df.loc[crash_cond | trend_break, 'Signal'] = 0
         df['Signal'] = df['Signal'].ffill().fillna(0)
         
-        # --- RENDIMIENTO ---
-        df['Market_Return'] = df['Close'].pct_change()
-        df['Strategy_Return'] = df['Market_Return'] * df['Signal'].shift(1)
+        df['Strat_Ret'] = df['Close'].pct_change() * df['Signal'].shift(1)
         df.dropna(inplace=True)
-        
-        df['Equity_BuyHold'] = initial_capital * (1 + df['Market_Return']).cumprod()
-        df['Equity_Strategy'] = initial_capital * (1 + df['Strategy_Return']).cumprod()
-        
+        df['Eq_Strat'] = capital * (1 + df['Strat_Ret']).cumprod()
+        df['Eq_BH'] = capital * (1 + df['Close'].pct_change()).cumprod()
         return df
-        
-    except Exception as e:
-        st.error(f"Error Técnico: {str(e)}")
-        return None
+    except: return None
 
-# ==============================================================================
-# 📱 INTERFAZ DE USUARIO
-# ==============================================================================
-
+# ------------------------------------------------------------------------------
+# UI
+# ------------------------------------------------------------------------------
 with st.sidebar:
     st.header("📡 FAROS")
-    app_mode = st.radio("MÓDULO:", ["🔍 SCANNER MERCADO", "⏳ MÁQUINA DEL TIEMPO"])
+    app_mode = st.radio("MÓDULO:", ["SCANNER PRO", "MÁQUINA DEL TIEMPO"])
     st.markdown("---")
-
-if app_mode == "🔍 SCANNER MERCADO":
-    # (Código del Scanner igual que antes...)
-    with st.sidebar:
-        time_horizon = st.selectbox("⏱️ Horizonte", ("Corto Plazo", "Medio Plazo", "Largo Plazo"))
-        if "Corto" in time_horizon: window_config = {'volatility': 10, 'trend': 20, 'download': '3mo', 'desc': 'Días'}
-        elif "Medio" in time_horizon: window_config = {'volatility': 20, 'trend': 50, 'download': '6mo', 'desc': 'Semanas'}
-        else: window_config = {'volatility': 60, 'trend': 200, 'download': '2y', 'desc': 'Meses'}
-        tickers = st.text_area("Cartera:", "PLTR, BTC-USD, CVX, SPY, TSLA", height=150)
-        if st.button("Analizar"): st.cache_data.clear()
-
-    st.title("Panel TAI-ACF en Vivo")
-    df = get_live_data(tickers, window_config)
-    if not df.empty:
-        col_list, col_radar = st.columns([1.6, 1])
-        with col_radar:
-            fig = px.scatter(df, x="Entropy", y="Liquidity", color="Category", text="Ticker", color_discrete_map={"success":"#28a745", "info":"#17a2b8", "neutral":"#6c757d", "warning":"#ffc107", "danger":"#dc3545"})
-            fig.update_layout(template="plotly_white", height=400, showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
-        with col_list:
-            for i, row in df.iterrows():
-                with st.container(border=True):
-                    c1, c2 = st.columns([3, 1])
-                    c1.markdown(f"**{row['Ticker']}** | {row['Signal']}")
-                    c2.markdown(f"**${row['Price']:,.2f}**")
-                    st.caption(f"{row['Narrative']} (H:{row['Entropy']:.1f}σ)")
-    else: st.info("Cargando...")
-
-elif app_mode == "⏳ MÁQUINA DEL TIEMPO":
-    st.title("Validación Histórica TAI-ACF")
-    st.markdown("Prueba la teoría en crisis reales (ej: COVID 2020).")
     
-    with st.sidebar:
-        st.subheader("Configuración de Prueba")
-        bt_ticker = st.text_input("Activo:", "SPY").upper()
-        
-        # SELECTOR DE FECHAS (Range)
-        c1, c2 = st.columns(2)
-        bt_start = c1.date_input("Inicio", pd.to_datetime("2019-01-01"))
-        bt_end = c2.date_input("Fin", pd.to_datetime("2021-01-01"))
-        
-        bt_capital = st.number_input("Capital Inicial ($)", value=10000)
-        run_bt = st.button("REPRODUCIR HISTORIA ▶️", type="primary")
+    # CALIBRADOR DE RIESGO (VITAL PARA QBTS)
+    st.subheader("🎛️ Calibración TAI")
+    risk_profile = st.select_slider("Tolerancia al Caos", options=["Conservador", "Growth", "Quantum/Venture"], value="Growth")
+    
+    if "Conservador" in risk_profile: risk_sigma = 2.0
+    elif "Growth" in risk_profile: risk_sigma = 3.0
+    else: risk_sigma = 5.0 # Para QBTS
+    
+    st.caption(f"Límite de Entropía: **{risk_sigma:.1f}σ**")
 
-    if run_bt:
-        with st.spinner(f"Simulando ciclo termodinámico en {bt_ticker}..."):
-            bt_data = run_backtest(bt_ticker, bt_start, bt_end, bt_capital)
-        
-        if bt_data is not None:
-            # MÉTRICAS
-            final_strat = bt_data['Equity_Strategy'].iloc[-1]
-            final_bh = bt_data['Equity_BuyHold'].iloc[-1]
-            
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Resultado FAROS", f"${final_strat:,.0f}", delta=f"{((final_strat/bt_capital)-1)*100:.1f}%")
-            m2.metric("Buy & Hold", f"${final_bh:,.0f}", delta=f"{((final_bh/bt_capital)-1)*100:.1f}%")
-            
-            alpha = final_strat - final_bh
-            color_alpha = "normal" if alpha > 0 else "inverse"
-            m3.metric("Protección/Alpha", f"${alpha:,.0f}", delta_color=color_alpha)
-            
-            # GRÁFICO AVANZADO CON FASES
-            st.subheader("Análisis de Fases Termodinámicas")
-            
-            # Crear figura
-            fig = go.Figure()
-            
-            # 1. Precio (Línea delgada negra)
-            fig.add_trace(go.Scatter(x=bt_data.index, y=bt_data['Close'], name='Precio', line=dict(color='black', width=1), opacity=0.5))
-            
-            # 2. COLOREAR EL FONDO SEGÚN LA FASE (LA CLAVE DEL DIAGNÓSTICO)
-            # FASE GAS (ROJO) = CAOS / CASH
-            gas_zones = bt_data[bt_data['Phase'] == 'GAS']
-            if not gas_zones.empty:
-                fig.add_trace(go.Scatter(
-                    x=gas_zones.index, y=gas_zones['Close'],
-                    mode='markers', name='Fase Gaseosa (Venta/Cash)',
-                    marker=dict(color='red', size=4, opacity=0.5)
-                ))
-            
-            # FASE LÍQUIDA (VERDE) = CRECIMIENTO
-            liquid_zones = bt_data[bt_data['Phase'] == 'LIQUID']
-            if not liquid_zones.empty:
-                 fig.add_trace(go.Scatter(
-                    x=liquid_zones.index, y=liquid_zones['Close'],
-                    mode='markers', name='Fase Líquida (Compra)',
-                    marker=dict(color='#00FF41', size=4, opacity=0.5)
-                ))
-
-            fig.update_layout(template="plotly_white", height=400, title="Ciclos de Mercado Detectados", yaxis_title="Precio")
+if app_mode == "SCANNER PRO":
+    time_h = st.selectbox("Horizonte", ["Corto", "Medio", "Largo"])
+    if "Corto" in time_h: cfg = {'volatility': 10, 'trend': 20, 'download': '3mo'}
+    elif "Medio" in time_h: cfg = {'volatility': 20, 'trend': 50, 'download': '6mo'}
+    else: cfg = {'volatility': 60, 'trend': 200, 'download': '2y'}
+    
+    tickers = st.text_area("Cartera:", "QBTS, PLTR, NVDA, SPY", height=100)
+    if st.button("Escanear Mercado"): st.cache_data.clear()
+    
+    df = get_live_data(tickers, cfg, risk_sigma)
+    
+    if not df.empty:
+        c1, c2 = st.columns([2,1])
+        with c2:
+            st.markdown("#### 🧭 Radar")
+            fig = px.scatter(df, x="Entropy", y="Liquidity", color="Category", text="Ticker", color_discrete_map={"success":"#28a745","warning":"#ffc107","danger":"#dc3545"})
+            fig.add_vline(x=risk_sigma, line_dash="dash", line_color="red", annotation_text="Límite Riesgo")
             st.plotly_chart(fig, use_container_width=True)
             
-            # GRÁFICO DE CAPITAL
-            st.subheader("Curva de Capital (Tu Dinero)")
-            fig2 = go.Figure()
-            fig2.add_trace(go.Scatter(x=bt_data.index, y=bt_data['Equity_Strategy'], name='Estrategia FAROS', line=dict(color='#0055FF', width=3)))
-            fig2.add_trace(go.Scatter(x=bt_data.index, y=bt_data['Equity_BuyHold'], name='Buy & Hold', line=dict(color='gray', dash='dot')))
-            fig2.update_layout(template="plotly_white", height=400, yaxis_title="Capital ($)")
-            st.plotly_chart(fig2, use_container_width=True)
+        with c1:
+            st.markdown("#### 📋 Resultados")
+            for i, r in df.iterrows():
+                with st.container(border=True):
+                    # CABECERA
+                    hc1, hc2 = st.columns([3,1])
+                    hc1.markdown(f"### **{r['Ticker']}**")
+                    hc2.markdown(f"### ${r['Price']:.2f}")
+                    
+                    # SEÑAL PRINCIPAL
+                    msg = f"{r['Signal']}: {r['Narrative']}"
+                    if r['Category']=='success': st.success(msg)
+                    elif r['Category']=='warning': st.warning(msg)
+                    elif r['Category']=='danger': st.error(msg)
+                    else: st.info(msg)
+                    
+                    # --- AQUÍ ESTÁ LA MAGIA DE LA VALIDACIÓN ---
+                    with st.expander(f"🔎 Ver Datos de Laboratorio ({r['Ticker']})"):
+                        st.markdown(f"""
+                        **Validación de Teoría TAI-ACF:**
+                        
+                        | Parámetro | Dato Crudo (Mercado) | Cálculo TAI (Algoritmo) | Interpretación |
+                        | :--- | :--- | :--- | :--- |
+                        | **Entropía ($H$)** | `{r['Raw_Vol']:.1f}%` (Anual) | **{r['Entropy']:.2f}σ** | {"🔴 Crítico" if r['Entropy'] > risk_sigma else "🟢 Estable"} bajo tu perfil. |
+                        | **Liquidez ($L$)** | `{r['Raw_Vol_Ratio']:.2f}x` (vs Promedio) | **{r['Liquidity']:.2f}** | { "🌊 Flujo Entrando" if r['Liquidity'] > 0 else "🏜️ Secándose" } |
+                        | **Gobernanza ($\Psi$)** | Precio vs SMA: `${r['SMA_Price']:.2f}` | **{r['Trend']:+.1f}%** | Distancia a la media móvil. |
+                        """)
+
+elif app_mode == "MÁQUINA DEL TIEMPO":
+    st.title("Backtest Calibrado")
+    tck = st.text_input("Activo:", "QBTS").upper()
+    c1, c2 = st.columns(2)
+    d_start = c1.date_input("Inicio", pd.to_datetime("2023-01-01"))
+    d_end = c2.date_input("Fin", pd.to_datetime("2024-12-31"))
+    
+    if st.button("Ejecutar Prueba"):
+        res = run_backtest(tck, d_start, d_end, 10000, risk_sigma)
+        if res is not None:
+            strat = res['Eq_Strat'].iloc[-1]
+            bh = res['Eq_BH'].iloc[-1]
+            st.metric("Resultado FAROS", f"${strat:,.0f}", delta=f"{(strat/10000 - 1)*100:.1f}%")
+            st.metric("Buy & Hold", f"${bh:,.0f}", delta=f"{(bh/10000 - 1)*100:.1f}%")
             
-            # DIAGNÓSTICO ESCRITO
-            with st.expander("📝 Ver Diagnóstico del Período"):
-                st.write(f"""
-                **Análisis del Ciclo ({bt_start} a {bt_end}):**
-                * En periodos de **Fase Gaseosa (Puntos Rojos)**, la entropía superó 2.5σ. El sistema debió pasar a Cash para evitar caídas.
-                * En periodos de **Fase Líquida (Puntos Verdes)**, la entropía bajó y la tendencia subió. El sistema invirtió para capturar valor.
-                """)
+            fig = go.Figure()
+            gas = res[res['Phase']=='GAS']
+            fig.add_trace(go.Scatter(x=gas.index, y=gas['Close'], mode='markers', marker=dict(color='red', size=5, opacity=0.3), name='Veto (Gas)'))
+            fig.add_trace(go.Scatter(x=res.index, y=res['Eq_Strat'], name='FAROS', line=dict(color='blue', width=2)))
+            fig.add_trace(go.Scatter(x=res.index, y=res['Eq_BH'], name='Hold', line=dict(color='gray', dash='dot')))
+            st.plotly_chart(fig, use_container_width=True)
+            st.info(f"Simulación ejecutada con tolerancia de **{risk_sigma}σ**.")
