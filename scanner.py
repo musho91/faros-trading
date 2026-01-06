@@ -67,39 +67,49 @@ def get_quant_data(tickers_input, window_cfg):
                 sma_trend = hist['Close'].rolling(w_trend).mean().iloc[-1]
                 trend_strength = (current_price - sma_trend) / sma_trend
                 
-                # --- D. ÁRBOL DE DECISIÓN (ALGORITMO) ---
+                # --- D. ÁRBOL DE DECISIÓN (AJUSTADO PARA GROWTH) ---
                 signal = "MANTENER"
-                category = "neutral" # Gris
-                narrative = "Consolidación. Sin catalizadores claros en este horizonte."
+                category = "neutral" 
+                narrative = "Consolidación. Esperando definición."
 
-                # 1. FILTRO DE ENTROPÍA
+                # 1. FILTRO DE ENTROPÍA (ALTA VOLATILIDAD)
                 if z_entropy > 2.0:
-                    # LA EXCEPCIÓN "PLTR": ¿Es caos o es crecimiento explosivo?
-                    if trend_strength > 0.10 and z_liquidity > 0:
+                    # NUEVA LÓGICA:
+                    # Si la tendencia es MUY fuerte (>15% sobre la media), 
+                    # ignoramos si el volumen de hoy es bajo. Asumimos que es Momentum puro.
+                    if trend_strength > 0.15: 
                         signal = "GROWTH AGRESIVO"
-                        category = "warning" # Amarillo
-                        narrative = f"⚡ Alta Volatilidad ({z_entropy:.1f}σ) impulsada por tendencia fuerte. Potencial explosivo (High Risk/Reward)."
+                        category = "warning"
+                        narrative = f"⚡ Alta Volatilidad ({z_entropy:.1f}σ) en tendencia alcista fuerte. Se permite la operación por Momentum."
+                    
+                    # Si la tendencia es moderada (>5%) PERO hay volumen hoy, también vale.
+                    elif trend_strength > 0.05 and z_liquidity > -0.1:
+                        signal = "GROWTH (VOLÁTIL)"
+                        category = "warning"
+                        narrative = f"⚡ Volatilidad alta, pero el precio y volumen sostienen la subida."
+                    
                     else:
+                        # Solo aquí marcamos riesgo real
                         signal = "RIESGO ALTO"
-                        category = "danger" # Rojo
-                        narrative = f"⚠️ Estructura Rota. Entropía excesiva ({z_entropy:.1f}σ) sin dirección clara. No operar."
+                        category = "danger"
+                        narrative = f"⚠️ Estructura Inestable. Alta entropía ({z_entropy:.1f}σ) sin fuerza de tendencia suficiente."
                 
-                # 2. SEÑALES DE SALIDA
+                # 2. SEÑALES DE SALIDA (Solo si la entropía es baja)
                 elif z_liquidity < -0.2 and trend_strength < -0.05:
                     signal = "VENTA / SALIDA"
-                    category = "warning" # Naranja (usamos warning visualmente)
-                    narrative = "📉 Distribución. El precio cae con volumen confirmando la salida."
+                    category = "warning"
+                    narrative = "📉 Debilidad confirmada. Precio y volumen cayendo."
                 
-                # 3. SEÑALES DE ENTRADA
-                elif trend_strength > 0.02 and z_entropy < 1.5:
-                    if z_liquidity > 0.15:
+                # 3. SEÑALES DE ENTRADA (Mercado Normal)
+                elif trend_strength > 0.02:
+                    if z_liquidity > 0.10:
                         signal = "COMPRA FUERTE"
-                        category = "success" # Verde
-                        narrative = f"🚀 Fase Líquida Pura. Convergencia de estabilidad y entrada masiva de dinero (+{z_liquidity*100:.0f}%)."
+                        category = "success"
+                        narrative = f"🚀 Fase Líquida Óptima. Baja volatilidad + Entrada de dinero institucional."
                     else:
                         signal = "ACUMULAR"
-                        category = "info" # Azul
-                        narrative = "📈 Tendencia alcista sana. Zona ideal para construir posición escalonada."
+                        category = "info"
+                        narrative = "📈 Tendencia alcista sana. Zona de compra tranquila."
 
                 data_list.append({
                     "Ticker": ticker, 
@@ -238,3 +248,4 @@ if not df.empty:
 
 else:
     st.info("⏳ Inicializando sistemas... Por favor espere un momento.")
+
