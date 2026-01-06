@@ -22,74 +22,89 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # 2. MOTOR LÓGICO DINÁMICO (Se adapta a la temporalidad)
+# ... (El resto de imports y configuración queda igual) ...
+
 @st.cache_data(ttl=300)
 def get_quant_data(tickers_input, window_cfg):
     tickers_list = [x.strip().upper() for x in tickers_input.split(',')]
     data_list = []
     
-    # Desempaquetar configuración de tiempo
-    w_vol = window_cfg['volatility'] # Ventana para Entropía
-    w_trend = window_cfg['trend']    # Ventana para Tendencia
-    period_dl = window_cfg['download'] # Cuanta data descargar
+    # Configuración de ventanas
+    w_calc = window_cfg['volatility'] # Días para calcular la desviación (ej. 10 o 200)
+    w_trend = window_cfg['trend']
+    period_dl = window_cfg['download']
 
     for ticker in tickers_list:
         try:
             stock = yf.Ticker(ticker)
-            # Descargamos suficiente historia
             hist = stock.history(period=period_dl)
             
             if len(hist) > w_trend:
                 current_price = hist['Close'].iloc[-1]
                 
-                # A. ENTROPÍA (H): Riesgo ajustado a la ventana
+                # --- CORRECCIÓN MATEMÁTICA AQUÍ ---
                 returns = hist['Close'].pct_change().dropna()
-                # Volatilidad en la ventana seleccionada
-                volatility_window = returns.tail(w_vol).std() * np.sqrt(w_vol) * 100
-                # Z-Score comparado con una base teórica del 5%
-                z_entropy = (volatility_window - 5) / 2 
                 
-                # B. LIQUIDEZ (L): Flujo de energía
-                # Comparamos volumen actual vs promedio de la ventana
-                vol_avg = hist['Volume'].rolling(w_vol).mean().iloc[-1]
+                # 1. Calculamos la volatilidad de la ventana seleccionada (ej. últimos 20 días)
+                # 2. La ANUALIZAMOS siempre (* sqrt(252)) para estandarizar la escala
+                # Esto evita que ventanas largas den números gigantes.
+                subset_returns = returns.tail(w_calc)
+                if len(subset_returns) > 1:
+                    vol_annualized = subset_returns.std() * np.sqrt(252) * 100
+                else:
+                    vol_annualized = 0
+                
+                # CALIBRACIÓN DE ENTROPÍA (Z-Score)
+                # Base del mercado: Una acción "normal" tiene 20-25% de volatilidad anual.
+                # Si NVDA tiene 60% anual, el Z será aprox 2.0 (Alto).
+                # Si tiene 90% (Crash), el Z será 3.5+.
+                # Ya no te dará 6.0 a menos que sea el fin del mundo.
+                z_entropy = (vol_annualized - 20) / 15 
+                
+                # --- FIN CORRECCIÓN ---
+
+                # B. LIQUIDEZ (L) - Momentum de Volumen relativo
+                vol_avg = hist['Volume'].rolling(w_calc).mean().iloc[-1]
                 curr_vol = hist['Volume'].iloc[-1]
                 z_liquidity = (curr_vol - vol_avg) / vol_avg if vol_avg > 0 else 0
                 
-                # C. TENDENCIA (Gobernanza del Precio)
+                # C. TENDENCIA
                 sma_trend = hist['Close'].rolling(w_trend).mean().iloc[-1]
                 trend_strength = (current_price - sma_trend) / sma_trend
                 
-                # Lógica de Señales (Gobernanza Psi implícita)
+                # Lógica de Señales Ajustada
                 signal = "MANTENER"
                 category = "neutral" 
-                narrative = "Equilibrio. Sin catalizadores claros en este horizonte."
+                narrative = "Equilibrio. Volatilidad dentro de rangos normales."
 
-                # Condiciones
-                if z_entropy > 2.5:
+                # Umbrales recalibrados para Z anualizado
+                if z_entropy > 2.0: # Equivale a >50% Volatilidad Anual
                     signal = "NO OPERAR"
                     category = "danger"
-                    narrative = f"⚠️ Entropía Crítica ({z_entropy:.1f}σ). El ruido supera a la señal en esta ventana de tiempo."
+                    narrative = f"⚠️ Alta Entropía ({z_entropy:.1f}σ). Volatilidad anualizada excesiva ({vol_annualized:.0f}%)."
                 
-                elif z_liquidity < -0.2 and trend_strength < -0.03:
+                elif z_liquidity < -0.2 and trend_strength < -0.05:
                     signal = "VENTA / SALIDA"
                     category = "warning"
-                    narrative = "📉 Divergencia negativa. El precio cae y el volumen confirma la salida de capital."
+                    narrative = "📉 Divergencia bajista. Precio cae con validación de volumen."
                 
                 elif trend_strength > 0.02 and z_entropy < 1.5:
                     if z_liquidity > 0.15:
                         signal = "COMPRA FUERTE"
                         category = "success"
-                        narrative = f"🚀 Fase Líquida. Estructura ordenada con inyección de capital (+{z_liquidity*100:.0f}% vol)."
+                        narrative = f"🚀 Fase Líquida. Estructura ordenada con inyección de capital (+{z_liquidity*100:.0f}%)."
                     else:
                         signal = "ACUMULAR"
                         category = "info"
-                        narrative = "📈 Tendencia favorable. Acumulación silenciosa detectada."
+                        narrative = "📈 Tendencia alcista sólida. Volatilidad controlada."
 
                 data_list.append({
                     "Ticker": ticker, "Price": current_price, "Signal": signal, 
                     "Category": category, "Narrative": narrative,
                     "Entropy": z_entropy, "Liquidity": z_liquidity, "Trend": trend_strength * 100
                 })
-        except: pass
+        except Exception as e:
+            pass
 
     df = pd.DataFrame(data_list)
     if not df.empty:
@@ -97,6 +112,8 @@ def get_quant_data(tickers_input, window_cfg):
         df['P'] = df['Category'].map(prio)
         df = df.sort_values('P')
     return df
+
+# ... (El resto del código de UI se mantiene igual) ...
 
 # 3. BARRA LATERAL (CONTROLES)
 with st.sidebar:
@@ -192,3 +209,4 @@ if not df.empty:
 
 else:
     st.info("Cargando datos... un momento.")
+
