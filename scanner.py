@@ -1,10 +1,10 @@
 # ==============================================================================
-# FAROS v15.0 - THE MASTER SUITE (FINAL PRODUCTION)
+# FAROS v15.1 - THE MASTER SUITE (FINAL POLISH)
 # Autor: Juan Arroyo | SG Consulting Group
 # Módulos: 
 #   1. Scanner Global (Con Inteligencia Sistémica & PSI Score)
 #   2. Backtest Time Machine (4 Estados de la Materia)
-#   3. Oráculo Estocástico (Con Momentum Bias & PHI Score)
+#   3. Oráculo Estocástico (Con Momentum Bias, PHI Score & Explicación Táctica)
 # ==============================================================================
 
 import streamlit as st
@@ -13,7 +13,6 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 import yfinance as yf
-from datetime import datetime, timedelta
 
 # --- CONFIGURACIÓN VISUAL ---
 st.set_page_config(page_title="FAROS | Master Suite", page_icon="📡", layout="wide")
@@ -22,9 +21,7 @@ st.markdown("""
     .stApp { background-color: #FFFFFF; color: #111; }
     h1, h2, h3 { color: #000 !important; } 
     .stExpander { border: 1px solid #eee; background-color: #f8f9fa; border-radius: 8px; }
-    /* Estilo para la barra de estado global */
     .global-status { padding: 15px; border-radius: 8px; margin-bottom: 20px; font-weight: bold; text-align: center; border: 1px solid #ddd; }
-    /* Métricas grandes */
     div[data-testid="stMetricValue"] { font-size: 1.4rem; }
 </style>
 """, unsafe_allow_html=True)
@@ -34,7 +31,6 @@ st.markdown("""
 # ==============================================================================
 
 def calculate_entropy(history, window=20):
-    """Calcula volatilidad anualizada (Entropía) de forma robusta."""
     if len(history) < window: return 0, 0
     returns = history['Close'].pct_change().dropna()
     subset = returns.tail(window)
@@ -44,7 +40,6 @@ def calculate_entropy(history, window=20):
 
 @st.cache_data(ttl=300)
 def get_market_status():
-    """Analiza el SPY para determinar la temperatura global."""
     try:
         spy = yf.Ticker("SPY").history(period="6mo")
         if spy.empty: return "UNKNOWN", 0, "Error de Datos"
@@ -55,30 +50,21 @@ def get_market_status():
     except: return "UNKNOWN", 0, "Desconectado"
 
 def calculate_psi(entropy, liquidity, trend, risk_sigma, global_penalty=0):
-    """
-    FÓRMULA MAESTRA (PSI - Ψ): Calidad del Presente.
-    """
     score = 50 
-    # Factor Riesgo
     if entropy > risk_sigma: score -= 30
     else: score += (risk_sigma - entropy) * 10 
-    # Factor Energía
     if liquidity > 0: score += liquidity * 20
     elif liquidity < -0.2: score -= 20
-    # Factor Dirección
     if trend > 0: score += trend * 100
     else: score -= 50
-    # Factor Sistémico
     score -= global_penalty
     return max(0, min(100, score))
 
 @st.cache_data(ttl=300)
 def get_live_data(tickers_input, window_cfg, risk_tolerance):
-    # 1. Contexto Global
     m_status, m_entropy, m_msg = get_market_status()
     global_penalty = 30 if m_status == "GAS" else (10 if m_status == "WARNING" else 0)
 
-    # 2. Análisis Individual
     tickers_list = [x.strip().upper() for x in tickers_input.split(',')]
     data_list = []
     
@@ -93,24 +79,17 @@ def get_live_data(tickers_input, window_cfg, risk_tolerance):
             hist = stock.history(period=window_cfg['download'])
             if len(hist) > window_cfg['trend']:
                 current_price = hist['Close'].iloc[-1]
-                
-                # Indicadores Físicos
                 raw_vol, z_entropy = calculate_entropy(hist, window_cfg['volatility'])
-                
                 vol_avg = hist['Volume'].rolling(window_cfg['volatility']).mean().iloc[-1]
                 curr_vol = hist['Volume'].iloc[-1]
                 z_liq = (curr_vol - vol_avg) / vol_avg if vol_avg > 0 else 0
                 raw_vol_ratio = (curr_vol / vol_avg) if vol_avg > 0 else 0
-                
                 sma_val = hist['Close'].rolling(window_cfg['trend']).mean().iloc[-1]
                 trend_pct = (current_price - sma_val) / sma_val
                 
-                # PSI SCORE
                 psi_score = calculate_psi(z_entropy, z_liq, trend_pct, risk_tolerance, global_penalty)
                 
-                # Lógica de Decisión
                 signal, category, narrative = "MANTENER", "neutral", "Sólido (Estable)."
-                
                 sys_warn = " ⚠️ [RIESGO GLOBAL]" if m_status == "GAS" else ""
                 
                 if z_entropy > entropy_limit:
@@ -148,7 +127,6 @@ def get_live_data(tickers_input, window_cfg, risk_tolerance):
                     "Exit_Limit": exit_threshold * 100
                 })
         except: pass
-    
     return pd.DataFrame(data_list).sort_values('Psi', ascending=False) if data_list else pd.DataFrame(), m_status, m_entropy, m_msg
 
 def run_backtest(ticker, start, end, capital, risk_tolerance):
@@ -157,7 +135,6 @@ def run_backtest(ticker, start, end, capital, risk_tolerance):
         if df.empty: return None
         if df.index.tz: df.index = df.index.tz_localize(None)
         
-        # Física
         df['SMA'] = df['Close'].rolling(50).mean()
         df['Trend'] = (df['Close'] - df['SMA']) / df['SMA']
         df['Ret'] = df['Close'].pct_change()
@@ -167,27 +144,21 @@ def run_backtest(ticker, start, end, capital, risk_tolerance):
         df['Z_Liq'] = (df['Volume'] - df['Vol_SMA']) / df['Vol_SMA']
         
         entropy_limit = risk_tolerance
-        
-        # 4 Fases de la Materia
         conditions = [
-            (df['Z_Entropy'] > entropy_limit) & (df['Trend'] < 0.15), # GAS
-            (df['Z_Liq'] < -0.3),                                     # PLASMA
-            (df['Trend'] > 0.02) & (df['Z_Entropy'] <= entropy_limit) & (df['Z_Liq'] > 0) # LIQUID
+            (df['Z_Entropy'] > entropy_limit) & (df['Trend'] < 0.15),
+            (df['Z_Liq'] < -0.3),
+            (df['Trend'] > 0.02) & (df['Z_Entropy'] <= entropy_limit) & (df['Z_Liq'] > 0)
         ]
         choices = ['GAS', 'PLASMA', 'LIQUID']
         df['Phase'] = np.select(conditions, choices, default='SOLID')
         
-        # Estrategia
         df['Signal'] = 0
         buy_cond = (df['Phase'].isin(['LIQUID', 'SOLID'])) & (df['Trend'] > 0)
         exit_limit = -0.15 if risk_tolerance >= 5 else (-0.10 if risk_tolerance >= 3 else -0.05)
         sell_cond = (df['Phase'] == 'GAS') | (df['Trend'] < exit_limit)
         
-        df.loc[buy_cond, 'Signal'] = 1
-        df.loc[sell_cond, 'Signal'] = 0
+        df.loc[buy_cond, 'Signal'] = 1; df.loc[sell_cond, 'Signal'] = 0
         df['Signal'] = df['Signal'].ffill().fillna(0)
-        
-        # Retornos
         df['Strat_Ret'] = df['Close'].pct_change() * df['Signal'].shift(1)
         df.dropna(inplace=True)
         df['Eq_Strat'] = capital * (1 + df['Strat_Ret']).cumprod()
@@ -206,15 +177,11 @@ def run_oracle_sim(ticker, days, risk_tolerance):
         returns = hist['Close'].pct_change().dropna()
         daily_vol = returns.std()
         
-        # CÁLCULO DE DRIFT CON INERCIA (MOMENTUM)
         sma_50 = hist['Close'].rolling(50).mean().iloc[-1]
         trend_force = (last_price - sma_50) / sma_50
         
-        # Drift histórico vs Drift de Tendencia
         hist_drift = returns.mean() - 0.5 * (daily_vol ** 2)
-        trend_drift = trend_force / 252 * 2 # Aceleración
-        
-        # Si es perfil Growth, confiamos más en la tendencia actual
+        trend_drift = trend_force / 252 * 2 
         final_drift = (hist_drift * 0.3) + (trend_drift * 0.7) if risk_tolerance >= 3 else hist_drift
         
         sims = 200
@@ -258,7 +225,6 @@ if app_mode == "SCANNER":
     
     df, m_status, m_entropy, m_msg = get_live_data(tickers, cfg, risk_sigma)
     
-    # Barra Global
     cols = {"GAS":("#FFCDD2","#B71C1C","🔥"), "WARNING":("#FFF9C4","#F57F17","⚠️"), "LIQUID":("#C8E6C9","#1B5E20","🌍")}
     bg, txt, ico = cols.get(m_status, ("#eee","#333","❓"))
     
@@ -282,7 +248,6 @@ if app_mode == "SCANNER":
                 with st.container(border=True):
                     hc1, hc2 = st.columns([3,1])
                     hc1.markdown(f"### **{r['Ticker']}** ${r['Price']:.2f}")
-                    # PSI Score Color
                     pc = "green" if r['Psi']>70 else "orange" if r['Psi']>40 else "red"
                     hc2.markdown(f"**Ψ: :{pc}[{r['Psi']:.0f}]**")
                     
@@ -342,12 +307,10 @@ elif app_mode == "ORÁCULO":
             start = paths[0][0]; final = paths[-1]
             p95 = np.percentile(final, 95); p50 = np.percentile(final, 50); p05 = np.percentile(final, 5)
             
-            # CÁLCULO PHI (Φ)
             win_rate = np.mean(final > start)
             upside = (p95 - start)/start; downside = abs((p05 - start)/start)
             rr = upside/downside if downside > 0 else 10
             
-            # Bonus Trend
             bonus = 20 if trend_f > 0.10 else 0
             if trend_f > 0.10: proj_h = max(0, proj_h - 1.0)
             
@@ -357,7 +320,7 @@ elif app_mode == "ORÁCULO":
             
             p_col = "green" if phi > 70 else "orange" if phi > 40 else "red"
             
-            # RESULTADOS
+            # 1. SCORE
             st.markdown(f"""
             <div style="text-align:center; padding:15px; border:1px solid #ddd; border-radius:10px; background-color:#f9f9f9; margin-bottom:20px;">
                 <h2 style="margin:0; color:#333;">POTENCIAL FUTURO (Φ)</h2>
@@ -366,11 +329,21 @@ elif app_mode == "ORÁCULO":
             </div>
             """, unsafe_allow_html=True)
             
+            # 2. MÉTRICAS
             k1, k2, k3 = st.columns(3)
-            k1.metric("🟢 Techo", f"${p95:.2f}", f"+{((p95/start)-1)*100:.1f}%")
-            k2.metric("🔵 Base", f"${p50:.2f}", f"{((p50/start)-1)*100:.1f}%")
-            k3.metric("🔴 Suelo", f"${p05:.2f}", f"{((p05/start)-1)*100:.1f}%")
+            k1.metric("🟢 Techo (Optimista)", f"${p95:.2f}", f"+{((p95/start)-1)*100:.1f}%")
+            k2.metric("🔵 Base (Probable)", f"${p50:.2f}", f"{((p50/start)-1)*100:.1f}%")
+            k3.metric("🔴 Suelo (Riesgo)", f"${p05:.2f}", f"{((p05/start)-1)*100:.1f}%")
             
+            # 3. EXPLICACIÓN TÁCTICA (¡LO QUE FALTABA!)
+            with st.expander("📖 Guía de Interpretación de Escenarios", expanded=True):
+                st.markdown("""
+                * **🟢 Escenario Optimista (Techo):** Representa el **mejor 5%** de los casos simulados. Si el precio llega aquí, el activo ha superado las expectativas estadísticas (Rendimiento excepcional).
+                * **🔵 Escenario Base (Mediana):** Es el camino de mayor probabilidad estadística. Si la inercia actual se mantiene sin eventos extraordinarios, el precio orbitará esta zona.
+                * **🔴 Escenario Pesimista (Suelo):** Representa el **peor 5%** de los casos (Cisne Negro). Este nivel marca tu **Riesgo Máximo Probable**; si rompe este nivel, la estructura del activo ha colapsado.
+                """)
+
+            # 4. GRÁFICO
             fig = go.Figure()
             for i in range(50): fig.add_trace(go.Scatter(y=paths[:, i], line=dict(color='gray', width=0.5), opacity=0.1, showlegend=False))
             fig.add_trace(go.Scatter(y=np.percentile(paths, 95, axis=1), name='Optimista', line=dict(color='green', dash='dash')))
