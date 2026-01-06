@@ -1,7 +1,7 @@
 # ==============================================================================
-# FAROS v19.1 - MASTER SUITE (ECUADOR TIME FIXED)
+# FAROS v20.0 - MASTER SUITE (TAI ALLOCATION ENGINE)
 # Autor: Juan Arroyo | SG Consulting Group & Emporium
-# Correcciones: Hora UTC-5 en Reportes, Buscador Smart, Lab y Gráficos Restaurados
+# Novedades: Asignación de Capital Inteligente basada en Score Psi
 # ==============================================================================
 
 import streamlit as st
@@ -26,7 +26,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 0. BASE DE DATOS DE ACTIVOS (SMART SEARCH)
+# 0. BASE DE DATOS (SMART SEARCH)
 # ==============================================================================
 ASSET_DB = {
     "PALANTIR (PLTR)": "PLTR", "NVIDIA (NVDA)": "NVDA", "D-WAVE (QBTS)": "QBTS", 
@@ -43,7 +43,6 @@ ASSET_DB = {
 }
 
 def get_tickers_from_selection(selection, manual_input):
-    """Combina la selección del menú con input manual"""
     selected = [ASSET_DB[k] for k in selection]
     if manual_input:
         manual_list = [x.strip().upper() for x in manual_input.split(',')]
@@ -51,7 +50,7 @@ def get_tickers_from_selection(selection, manual_input):
     return list(set(selected)) 
 
 # ==============================================================================
-# 1. MOTOR LÓGICO & MATEMÁTICO (CORE)
+# 1. MOTOR LÓGICO (CORE)
 # ==============================================================================
 
 def calculate_entropy(history, window=20):
@@ -94,19 +93,65 @@ def get_market_status():
     except: return "UNKNOWN", 0, "Desconectado", pd.DataFrame()
 
 # ==============================================================================
-# 2. GENERADORES DE REPORTES (AUDITORÍA & SCANNER) - FIXED UTC-5
+# 2. MOTOR DE ASIGNACIÓN TAI (NUEVO)
+# ==============================================================================
+
+def calculate_tai_weights(tickers, risk_tolerance):
+    """Calcula la distribución óptima de pesos basada en Score Psi."""
+    scores = {}
+    valid_tickers = []
+    
+    # Obtener estado global para penalizaciones
+    m_status, _, _, _ = get_market_status()
+    global_penalty = 30 if m_status == "GAS" else 0
+
+    for t in tickers:
+        try:
+            hist = yf.Ticker(t).history(period="6mo")
+            if len(hist) > 50:
+                raw_vol, z_entropy = calculate_entropy(hist)
+                sma = hist['Close'].rolling(50).mean().iloc[-1]
+                trend = (hist['Close'].iloc[-1] - sma) / sma
+                
+                # Calcular PSI
+                psi = calculate_psi(z_entropy, 0, trend, risk_tolerance, global_penalty)
+                
+                # REGLA DE ASIGNACIÓN TAI:
+                # 1. Si es GAS (Riesgo Extremo), peso tiende a 0.
+                # 2. El peso es proporcional al Score Psi al cuadrado (para premiar a los mejores).
+                
+                if z_entropy > risk_tolerance:
+                    weight_score = 0 # Penalización total a fase gaseosa
+                else:
+                    weight_score = psi if psi > 0 else 0
+                
+                scores[t] = weight_score
+                valid_tickers.append(t)
+        except: pass
+    
+    total_score = sum(scores.values())
+    
+    weights_str = ""
+    if total_score > 0:
+        for t in valid_tickers:
+            w = scores[t] / total_score
+            weights_str += f"{t}, {w:.2f}\n"
+    else:
+        # Fallback si todo es 0 (Mercado en colapso total)
+        weights_str = "\n".join([f"{t}, {1/len(tickers):.2f}" for t in tickers])
+        
+    return weights_str
+
+# ==============================================================================
+# 3. GENERADORES DE REPORTES
 # ==============================================================================
 
 def get_ecuador_time():
-    """Calcula la hora actual en Ecuador (UTC-5)"""
     return (datetime.utcnow() - timedelta(hours=5)).strftime("%Y-%m-%d %H:%M:%S (Quito/EC)")
 
 def generate_portfolio_report(df_portfolio, metrics, risk_profile):
-    """Reporte de Auditoría de Portafolio."""
     now_ec = get_ecuador_time()
-    
     df_html = df_portfolio[['Ticker', 'Weight', 'Price', 'Beta', 'Psi', 'Status', 'Action']].to_html(classes='table', index=False, float_format="%.2f")
-    
     html = f"""
     <html><head><style>
         body {{ font-family: Helvetica, sans-serif; padding: 40px; color: #333; }}
@@ -118,33 +163,26 @@ def generate_portfolio_report(df_portfolio, metrics, risk_profile):
     </style></head><body>
         <h1>FAROS | Auditoría de Portafolio</h1>
         <p><strong>Operador:</strong> SG Consulting Group & Emporium | <strong>Fecha:</strong> {now_ec}</p>
-        
         <h3>1. Métricas Agregadas</h3>
         <div>
             <div class="metric-box"><strong>Beta Global</strong><br><h2>{metrics['Beta']:.2f}x</h2></div>
             <div class="metric-box"><strong>Calidad (Ψ)</strong><br><h2>{metrics['Psi']:.0f}/100</h2></div>
             <div class="metric-box"><strong>Perfil Riesgo</strong><br><h2>{risk_profile}</h2></div>
         </div>
-
         <h3>2. Posiciones y Diagnóstico Táctico</h3>
         {df_html}
-
         <p style="font-size: 10px; color: #777; margin-top: 50px;">Generado por Algoritmo TAI-ACF. Uso interno.</p>
     </body></html>
     """
     return html
 
 def generate_scanner_report(df_scan, market_status, risk_profile):
-    """Reporte de Escaneo de Oportunidades."""
     now_ec = get_ecuador_time()
-    
     df_print = df_scan[['Ticker', 'Price', 'Signal', 'Psi', 'Entropy', 'Trend']].copy()
     df_print['Trend'] = (df_print['Trend']/100).map("{:.1%}".format)
     df_print['Entropy'] = df_print['Entropy'].map("{:.2f}σ".format)
     df_html = df_print.to_html(classes='table', index=False, float_format="%.2f")
-    
     best_asset = df_scan.iloc[0] 
-    
     html = f"""
     <html><head><style>
         body {{ font-family: Helvetica, sans-serif; padding: 40px; color: #333; }}
@@ -157,29 +195,20 @@ def generate_scanner_report(df_scan, market_status, risk_profile):
     </style></head><body>
         <h1>FAROS | Informe de Inteligencia de Mercado</h1>
         <p><strong>Emisión:</strong> {now_ec} | <strong>Perfil:</strong> {risk_profile}</p>
-        
-        <div class="status-bar">
-            CONTEXTO GLOBAL (SPY): {market_status}
-        </div>
-
+        <div class="status-bar">CONTEXTO GLOBAL (SPY): {market_status}</div>
         <div class="highlight">
             <strong>🏆 Oportunidad Destacada:</strong> {best_asset['Ticker']} (${best_asset['Price']:.2f})<br>
             Score: <strong>{best_asset['Psi']:.0f}/100</strong> | Señal: {best_asset['Signal']}
         </div>
-
         <h3>Análisis Detallado de Activos Escaneados</h3>
         {df_html}
-
-        <p style="font-size: 10px; color: #777; margin-top: 50px;">
-            Este documento refleja las condiciones de mercado en el momento exacto de la generación.
-            Metodología TAI-ACF propiedad de SG Consulting Group.
-        </p>
+        <p style="font-size: 10px; color: #777; margin-top: 50px;">Metodología TAI-ACF propiedad de SG Consulting Group.</p>
     </body></html>
     """
     return html
 
 # ==============================================================================
-# 3. FUNCIONES DE MÓDULOS (CORE FUNCTIONS)
+# 4. FUNCIONES DE MÓDULOS (CORE FUNCTIONS)
 # ==============================================================================
 
 # --- MACRO ---
@@ -241,12 +270,10 @@ def analyze_portfolio(holdings, risk_tolerance):
         except: pass
     df_res = pd.DataFrame(results)
     
-    # Matriz Correlación
     try:
         data_corr = yf.download(tickers, period="6mo")['Close'].pct_change().dropna()
         corr_matrix = data_corr.corr()
-    except:
-        corr_matrix = pd.DataFrame() 
+    except: corr_matrix = pd.DataFrame()
 
     port_beta = (df_res['Beta'] * df_res['Weight']).sum()
     port_psi = (df_res['Psi'] * df_res['Weight']).sum()
@@ -258,13 +285,11 @@ def analyze_portfolio(holdings, risk_tolerance):
 def get_live_data(tickers_list, window_cfg, risk_tolerance):
     m_status, m_entropy, m_msg, _ = get_market_status()
     global_penalty = 30 if m_status == "GAS" else (10 if m_status == "WARNING" else 0)
-
     data_list = []
     entropy_limit = risk_tolerance 
     if risk_tolerance >= 5.0: exit_threshold = -0.15
     elif risk_tolerance >= 3.0: exit_threshold = -0.10
     else: exit_threshold = -0.05
-
     for ticker in tickers_list:
         try:
             stock = yf.Ticker(ticker)
@@ -278,46 +303,18 @@ def get_live_data(tickers_list, window_cfg, risk_tolerance):
                 raw_vol_ratio = (curr_vol / vol_avg) if vol_avg > 0 else 0
                 sma_val = hist['Close'].rolling(window_cfg['trend']).mean().iloc[-1]
                 trend_pct = (current_price - sma_val) / sma_val
-                
                 psi_score = calculate_psi(z_entropy, z_liq, trend_pct, risk_tolerance, global_penalty)
-                
                 signal, category, narrative = "MANTENER", "neutral", "Sólido (Estable)."
                 sys_warn = " ⚠️ [RIESGO GLOBAL]" if m_status == "GAS" else ""
-                
                 if z_entropy > entropy_limit:
-                    if trend_pct > 0.15: 
-                        signal = "GROWTH EXTREMO"
-                        category = "warning"
-                        narrative = f"⚡ Momentum (+{trend_pct*100:.1f}%) vence volatilidad.{sys_warn}"
-                    else:
-                        signal = "GAS / RIESGO"
-                        category = "danger"
-                        narrative = f"⚠️ Fase Gaseosa Local ({z_entropy:.1f}σ).{sys_warn}"
-                elif trend_pct < exit_threshold:
-                    signal = "SALIDA"
-                    category = "danger" if risk_tolerance < 3 else "warning"
-                    narrative = f"📉 Rotura Estructural ({trend_pct*100:.1f}%).{sys_warn}"
+                    if trend_pct > 0.15: signal = "GROWTH EXTREMO"; category = "warning"; narrative = f"⚡ Momentum (+{trend_pct*100:.1f}%) vence volatilidad.{sys_warn}"
+                    else: signal = "GAS / RIESGO"; category = "danger"; narrative = f"⚠️ Fase Gaseosa Local ({z_entropy:.1f}σ).{sys_warn}"
+                elif trend_pct < exit_threshold: signal = "SALIDA"; category = "danger" if risk_tolerance < 3 else "warning"; narrative = f"📉 Rotura Estructural ({trend_pct*100:.1f}%).{sys_warn}"
                 elif trend_pct > 0.02:
-                    if z_liq > 0.10:
-                        signal = "COMPRA FUERTE"
-                        category = "success" if m_status != "GAS" else "warning"
-                        narrative = f"🚀 Fase Líquida Óptima.{sys_warn}"
-                    else:
-                        signal = "ACUMULAR"
-                        category = "info" if m_status != "GAS" else "neutral"
-                        narrative = f"📈 Tendencia Sana.{sys_warn}"
-                elif z_liq < -0.3 and abs(trend_pct) < 0.02:
-                     signal = "PLASMA"
-                     category = "neutral"
-                     narrative = "🟡 Iliquidez (Mercado Seco)."
-
-                data_list.append({
-                    "Ticker": ticker, "Price": current_price, "Signal": signal, 
-                    "Category": category, "Narrative": narrative,
-                    "Entropy": z_entropy, "Liquidity": z_liq, "Trend": trend_pct * 100,
-                    "Psi": psi_score, "Raw_Vol": raw_vol, "Raw_Vol_Ratio": raw_vol_ratio, "SMA_Price": sma_val,
-                    "Exit_Limit": exit_threshold * 100
-                })
+                    if z_liq > 0.10: signal = "COMPRA FUERTE"; category = "success" if m_status != "GAS" else "warning"; narrative = f"🚀 Fase Líquida Óptima.{sys_warn}"
+                    else: signal = "ACUMULAR"; category = "info" if m_status != "GAS" else "neutral"; narrative = f"📈 Tendencia Sana.{sys_warn}"
+                elif z_liq < -0.3 and abs(trend_pct) < 0.02: signal = "PLASMA"; category = "neutral"; narrative = "🟡 Iliquidez (Mercado Seco)."
+                data_list.append({"Ticker": ticker, "Price": current_price, "Signal": signal, "Category": category, "Narrative": narrative, "Entropy": z_entropy, "Liquidity": z_liq, "Trend": trend_pct * 100, "Psi": psi_score, "Raw_Vol": raw_vol, "Raw_Vol_Ratio": raw_vol_ratio, "SMA_Price": sma_val, "Exit_Limit": exit_threshold * 100})
         except: pass
     return pd.DataFrame(data_list).sort_values('Psi', ascending=False) if data_list else pd.DataFrame(), m_status, m_entropy, m_msg
 
@@ -398,22 +395,33 @@ if app_mode == "🌎 MACRO ECONOMÍA":
             st.plotly_chart(px.line(df_ch), use_container_width=True)
 
 # --------------------------------------------------------------------------
-# MÓDULO: PORTAFOLIO (FIXED TABLE & SEARCH)
+# MÓDULO: PORTAFOLIO (NUEVA ASIGNACIÓN TAI)
 # --------------------------------------------------------------------------
 elif app_mode == "💼 GESTIÓN PORTAFOLIOS":
     st.title("Gestión de Activos & Riesgo")
     
     with st.expander("📝 Editar Composición del Portafolio", expanded=True):
         c1, c2 = st.columns(2)
-        # SMART SEARCH
+        # 1. SELECCIÓN ACTIVOS
         sel_assets = c1.multiselect("Seleccionar Activos:", options=list(ASSET_DB.keys()), default=["PALANTIR (PLTR)", "NVIDIA (NVDA)"])
         manual_assets = c1.text_input("Otros Tickers (separados por coma):", "")
         
-        final_tickers = get_tickers_from_selection(sel_assets, manual_assets)
+        # 2. CALCULAR TAI (NUEVO)
+        if c1.button("⚡ Auto-Balancear (Criterio TAI)"):
+            with st.spinner("Calculando asignación óptima basada en Termodinámica (Psi)..."):
+                final_tickers = get_tickers_from_selection(sel_assets, manual_assets)
+                recommended_weights = calculate_tai_weights(final_tickers, risk_sigma)
+                st.session_state['weights_area'] = recommended_weights
         
-        weights_input = c2.text_area("Asignar Pesos (Ticker, 0.XX):", 
-                                     value="\n".join([f"{t}, {1/len(final_tickers):.2f}" for t in final_tickers]) if final_tickers else "",
-                                     height=150)
+        # 3. AREA DE PESOS (EDITABLE)
+        default_val = st.session_state.get('weights_area', "")
+        if not default_val:
+            # Si está vacío, por defecto igual ponderación
+            final_tickers = get_tickers_from_selection(sel_assets, manual_assets)
+            if final_tickers:
+                default_val = "\n".join([f"{t}, {1/len(final_tickers):.2f}" for t in final_tickers])
+
+        weights_input = c2.text_area("Distribución de Capital (Ticker, Peso):", value=default_val, height=150)
         
         if c2.button("Analizar Cartera"):
             try:
@@ -428,8 +436,7 @@ elif app_mode == "💼 GESTIÓN PORTAFOLIOS":
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("Activos", len(df_p)); k2.metric("Beta", f"{metrics['Beta']:.2f}x"); k3.metric("Score TAI", f"{metrics['Psi']:.0f}/100"); k4.metric("Estado", "LÍQUIDO" if metrics['Psi']>50 else "GASEOSO")
             
-            if not corr_m.empty:
-                st.plotly_chart(px.imshow(corr_m, text_auto=True, color_continuous_scale='RdBu_r'), use_container_width=True)
+            if not corr_m.empty: st.plotly_chart(px.imshow(corr_m, text_auto=True, color_continuous_scale='RdBu_r'), use_container_width=True)
             
             st.subheader("🚨 Alertas Tácticas")
             critical = df_p[df_p['Action'] != "MANTENER"]
@@ -439,16 +446,14 @@ elif app_mode == "💼 GESTIÓN PORTAFOLIOS":
                     st.markdown(f"<div style='padding:10px; border:1px solid {color}; border-radius:5px; margin-bottom:5px;'><b>{row['Ticker']}:</b> {row['Action']} (Ψ: {row['Psi']:.0f})</div>", unsafe_allow_html=True)
             else: st.success("✅ Portafolio saludable.")
             
-            # REPORT GEN
             if st.button("🖨️ Generar Informe de Auditoría"):
                 report_html = generate_portfolio_report(df_p, metrics, risk_profile)
                 st.download_button("Descargar Informe (HTML)", report_html, "auditoria_faros.html", "text/html")
             
-            with st.expander("📄 Detalle Técnico"): 
-                st.dataframe(df_p)
+            with st.expander("📄 Detalle Técnico"): st.dataframe(df_p)
 
 # --------------------------------------------------------------------------
-# MÓDULO: SCANNER (RESTORED LAB & SMART SEARCH)
+# MÓDULO: SCANNER
 # --------------------------------------------------------------------------
 elif app_mode == "🔍 SCANNER MERCADO":
     time_h = st.selectbox("Horizonte", ["Corto Plazo", "Medio Plazo", "Largo Plazo"])
@@ -456,7 +461,6 @@ elif app_mode == "🔍 SCANNER MERCADO":
     elif "Medio" in time_h: cfg = {'volatility': 20, 'trend': 50, 'download': '6mo'}
     else: cfg = {'volatility': 60, 'trend': 200, 'download': '2y'}
     
-    # SMART SEARCH UI
     col_search, col_manual = st.columns([3, 1])
     selected_assets = col_search.multiselect("Buscar Empresas:", options=list(ASSET_DB.keys()), default=["PALANTIR (PLTR)", "NVIDIA (NVDA)", "D-WAVE (QBTS)"])
     manual_tickers = col_manual.text_input("Otros (Tickers):", "")
@@ -464,18 +468,15 @@ elif app_mode == "🔍 SCANNER MERCADO":
     if st.button("Analizar Mercado"): 
         st.cache_data.clear()
         target_list = get_tickers_from_selection(selected_assets, manual_tickers)
-        
         df, m_status, m_entropy, m_msg = get_live_data(target_list, cfg, risk_sigma)
         cols = {"GAS":("#FFCDD2","#B71C1C","🔥"), "WARNING":("#FFF9C4","#F57F17","⚠️"), "LIQUID":("#C8E6C9","#1B5E20","🌍")}
         bg, txt, ico = cols.get(m_status, ("#eee","#333","❓"))
-        
         st.markdown(f"<div class='global-status' style='background-color:{bg}; color:{txt};'>{ico} SPY: {m_msg}</div>", unsafe_allow_html=True)
         
         if not df.empty:
             if st.button("🖨️ Generar Informe de Oportunidades"):
                 scan_html = generate_scanner_report(df, m_status, risk_profile)
                 st.download_button("Descargar Informe (HTML)", scan_html, "escaneo_faros.html", "text/html")
-                
             c1, c2 = st.columns([2,1])
             with c2: st.plotly_chart(px.scatter(df, x="Entropy", y="Liquidity", color="Category", text="Ticker"), use_container_width=True)
             with c1:
@@ -487,45 +488,32 @@ elif app_mode == "🔍 SCANNER MERCADO":
                         elif r['Category']=='warning': st.warning(msg)
                         elif r['Category']=='danger': st.error(msg)
                         else: st.info(msg)
-                        
-                        # LAB RESTORED
-                        with st.expander("🔬 Lab Data"):
-                            st.markdown(f"**Vol:** {r['Raw_Vol']:.0f}% ({r['Entropy']:.2f}σ) | **Tendencia:** {r['Trend']:+.1f}% | **Liq:** {r['Raw_Vol_Ratio']:.1f}x")
+                        with st.expander("🔬 Lab Data"): st.markdown(f"**Vol:** {r['Raw_Vol']:.0f}% ({r['Entropy']:.2f}σ) | **Tendencia:** {r['Trend']:+.1f}% | **Liq:** {r['Raw_Vol_Ratio']:.1f}x")
 
 # --------------------------------------------------------------------------
-# MÓDULO: BACKTEST (RESTORED CHARTS)
+# MÓDULO: BACKTEST
 # --------------------------------------------------------------------------
 elif app_mode == "⏳ BACKTEST LAB":
     st.title("Validación Histórica")
-    
-    # Inputs Restaurados
     c_tick, c_cap = st.columns([1, 1]); tck = c_tick.text_input("Activo:", "PLTR").upper(); cap = c_cap.number_input("Capital", value=10000)
     c1, c2 = st.columns(2); d1 = c1.date_input("Inicio", pd.to_datetime("2023-01-01")); d2 = c2.date_input("Fin", pd.to_datetime("2025-01-05"))
-    
     if st.button("Ejecutar"):
         res = run_backtest(tck, d1, d2, cap, risk_sigma)
         if res is not None:
-            fin = res['Eq_Strat'].iloc[-1]
-            st.metric("Resultado Final", f"${fin:,.0f}", delta=f"{(fin/cap-1)*100:.1f}%")
-            
+            fin = res['Eq_Strat'].iloc[-1]; st.metric("Resultado Final", f"${fin:,.0f}", delta=f"{(fin/cap-1)*100:.1f}%")
             st.subheader("Ciclos Detectados")
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=res.index, y=res['Close'], name='Precio', line=dict(color='black', width=1), opacity=0.3))
+            fig = go.Figure(); fig.add_trace(go.Scatter(x=res.index, y=res['Close'], name='Precio', line=dict(color='black', width=1), opacity=0.3))
             colors = {'GAS': 'red', 'LIQUID': '#00FF41', 'PLASMA': '#FFD700', 'SOLID': 'gray'}
             for p, c in colors.items(): 
                 s = res[res['Phase']==p]; 
                 if not s.empty: fig.add_trace(go.Scatter(x=s.index, y=s['Close'], mode='markers', name=p, marker=dict(color=c, size=5)))
             st.plotly_chart(fig, use_container_width=True)
-            
-            # CHART RESTORED
             st.subheader("Curva de Capital (Tu Dinero)")
-            fig2 = go.Figure()
-            fig2.add_trace(go.Scatter(x=res.index, y=res['Eq_Strat'], name='FAROS', line=dict(color='blue', width=2)))
-            fig2.add_trace(go.Scatter(x=res.index, y=res['Eq_BH'], name='Buy & Hold', line=dict(color='gray', dash='dot')))
+            fig2 = go.Figure(); fig2.add_trace(go.Scatter(x=res.index, y=res['Eq_Strat'], name='FAROS', line=dict(color='blue', width=2))); fig2.add_trace(go.Scatter(x=res.index, y=res['Eq_BH'], name='Buy & Hold', line=dict(color='gray', dash='dot')))
             st.plotly_chart(fig2, use_container_width=True)
 
 # --------------------------------------------------------------------------
-# MÓDULO: ORÁCULO (RESTORED NOTES)
+# MÓDULO: ORÁCULO
 # --------------------------------------------------------------------------
 elif app_mode == "🔮 ORÁCULO FUTURO":
     st.title("Proyección TAI (Potencial Φ)")
@@ -540,17 +528,9 @@ elif app_mode == "🔮 ORÁCULO FUTURO":
             phi = (win_rate * 50) + (min(rr, 4) * 10) + bonus; phi = max(0, min(100, phi))
             p_col = "green" if phi > 70 else "orange" if phi > 40 else "red"
             st.markdown(f"<div style='text-align:center; padding:15px; border:1px solid #ddd; border-radius:10px; background-color:#f9f9f9;'><h2 style='margin:0;'>POTENCIAL FUTURO (Φ)</h2><h1 style='margin:0; font-size:4rem; color:{p_col};'>{phi:.0f}/100</h1><p>Probabilidad: <b>{win_rate*100:.0f}%</b> | R/R: <b>{rr:.1f}x</b></p></div>", unsafe_allow_html=True)
-            k1, k2, k3 = st.columns(3)
-            k1.metric("🟢 Techo", f"${p95:.2f}"); k2.metric("🔵 Base", f"${p50:.2f}"); k3.metric("🔴 Suelo", f"${p05:.2f}")
-            
-            # NOTES RESTORED
+            k1, k2, k3 = st.columns(3); k1.metric("🟢 Techo", f"${p95:.2f}"); k2.metric("🔵 Base", f"${p50:.2f}"); k3.metric("🔴 Suelo", f"${p05:.2f}")
             with st.expander("📖 Interpretación Táctica de Escenarios", expanded=True):
-                st.markdown("""
-                * **🟢 Techo (Optimista):** Rendimiento excepcional (Top 5% de probabilidad). Si llega aquí, es un 'Moonshot'.
-                * **🔵 Base (Probable):** Mediana estadística. Si la inercia actual se mantiene, el precio orbitará esta zona.
-                * **🔴 Suelo (Riesgo):** Escenario de Cisne Negro (Peor 5%). Este nivel marca tu **Riesgo Máximo Probable**.
-                """)
-            
+                st.markdown("""* **🟢 Techo (Optimista):** Rendimiento excepcional (Top 5% de probabilidad). Si llega aquí, es un 'Moonshot'.\n* **🔵 Base (Probable):** Mediana estadística. Si la inercia actual se mantiene, el precio orbitará esta zona.\n* **🔴 Suelo (Riesgo):** Escenario de Cisne Negro (Peor 5%). Este nivel marca tu **Riesgo Máximo Probable**.""")
             fig = go.Figure()
             for i in range(50): fig.add_trace(go.Scatter(y=paths[:, i], line=dict(color='gray', width=0.5), opacity=0.1, showlegend=False))
             fig.add_trace(go.Scatter(y=np.percentile(paths, 50, axis=1), name='Tendencia', line=dict(color='blue', width=3)))
