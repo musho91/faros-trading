@@ -1,6 +1,12 @@
 # ==============================================================================
-# FAROS v16.1 - MASTER SUITE COMPLETE (ALL MODULES INTEGRATED)
+# FAROS v17.0 - THE MASTER SUITE (FULL INTEGRATION)
 # Autor: Juan Arroyo | SG Consulting Group
+# Módulos: 
+#   1. Observatorio Macro (Países/Divisas)
+#   2. Gestión de Portafolios (Correlación/Riesgo)
+#   3. Scanner Mercado (Señales/Psi)
+#   4. Backtest Lab (Fases Termodinámicas)
+#   5. Oráculo Futuro (Proyección Estocástica Estable)
 # ==============================================================================
 
 import streamlit as st
@@ -21,11 +27,12 @@ st.markdown("""
     .stExpander { border: 1px solid #ddd; background-color: #f8f9fa; border-radius: 8px; }
     .global-status { padding: 15px; border-radius: 8px; margin-bottom: 20px; font-weight: bold; text-align: center; border: 1px solid #ddd; }
     div[data-testid="stMetricValue"] { font-size: 1.4rem; }
+    .macro-card { padding: 20px; background-color: #f8f9fa; border-radius: 10px; border: 1px solid #ddd; margin-bottom: 20px; text-align: center; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 1. MOTOR LÓGICO & MATEMÁTICO (CORE SHARED)
+# 1. MOTOR LÓGICO & MATEMÁTICO (CORE)
 # ==============================================================================
 
 def calculate_entropy(history, window=20):
@@ -37,9 +44,7 @@ def calculate_entropy(history, window=20):
     return raw_vol, z_entropy
 
 def calculate_beta(ticker_hist, market_hist):
-    """Calcula la sensibilidad (Beta) del activo respecto al SPY."""
     try:
-        # Alinear fechas
         df = pd.DataFrame({'Asset': ticker_hist['Close'].pct_change(), 'Market': market_hist['Close'].pct_change()}).dropna()
         if df.empty: return 1.0
         cov = df.cov().iloc[0, 1]
@@ -70,7 +75,92 @@ def get_market_status():
         else: return "LIQUID", z, "ESTABLE", spy
     except: return "UNKNOWN", 0, "Desconectado", pd.DataFrame()
 
-# --- FUNCIÓN SCANNER INDIVIDUAL ---
+# ==============================================================================
+# 2. FUNCIONES ESPECÍFICAS POR MÓDULO
+# ==============================================================================
+
+# --- FUNCIÓN MACRO ---
+def analyze_country(country_name):
+    proxies = {
+        "USA": {"ETF": "SPY", "FX": "DX-Y.NYB", "Name": "Estados Unidos", "FX_Inv": False},
+        "MEXICO": {"ETF": "EWW", "FX": "MXN=X", "Name": "México", "FX_Inv": True},
+        "BRASIL": {"ETF": "EWZ", "FX": "BRL=X", "Name": "Brasil", "FX_Inv": True},
+        "EUROPA": {"ETF": "VGK", "FX": "EURUSD=X", "Name": "Eurozona", "FX_Inv": False},
+        "CHINA": {"ETF": "MCHI", "FX": "CNY=X", "Name": "China", "FX_Inv": True},
+        "JAPON": {"ETF": "EWJ", "FX": "JPY=X", "Name": "Japón", "FX_Inv": True},
+        "ARGENTINA": {"ETF": "ARGT", "FX": "ARS=X", "Name": "Argentina", "FX_Inv": True},
+    }
+    
+    target = proxies.get(country_name, None)
+    if not target: return None
+    
+    try:
+        etf_h = yf.Ticker(target['ETF']).history(period="1y")
+        fx_h = yf.Ticker(target['FX']).history(period="1y")
+        
+        etf_vol, etf_z = calculate_entropy(etf_h)
+        etf_sma = etf_h['Close'].rolling(50).mean().iloc[-1]
+        etf_trend = (etf_h['Close'].iloc[-1] - etf_sma) / etf_sma
+        
+        fx_vol, fx_z = calculate_entropy(fx_h)
+        fx_sma = fx_h['Close'].rolling(50).mean().iloc[-1]
+        fx_change = (fx_h['Close'].iloc[-1] - fx_sma) / fx_sma
+        
+        local_currency_strength = -fx_change if target['FX_Inv'] else fx_change
+        currency_status = "FORTALECIÉNDOSE" if local_currency_strength > 0 else "DEBILITÁNDOSE"
+        
+        econ_score = calculate_psi(etf_z, 0, etf_trend, 3.0)
+        
+        return {
+            "Name": target['Name'],
+            "ETF_Ticker": target['ETF'], "ETF_Price": etf_h['Close'].iloc[-1],
+            "ETF_Trend": etf_trend, "ETF_Vol": etf_vol,
+            "FX_Ticker": target['FX'], "FX_Price": fx_h['Close'].iloc[-1],
+            "Local_FX_Trend": local_currency_strength, "Macro_Score": econ_score
+        }
+    except: return None
+
+# --- FUNCIÓN PORTAFOLIO ---
+def analyze_portfolio(holdings, risk_tolerance):
+    m_status, m_entropy, m_msg, spy_hist = get_market_status()
+    global_penalty = 30 if m_status == "GAS" else 0
+    results = []
+    tickers = list(holdings.keys())
+    if 'CASH' in tickers: tickers.remove('CASH')
+    
+    if not tickers: return None, None, None
+    
+    for t in tickers:
+        try:
+            stock = yf.Ticker(t)
+            hist = stock.history(period="1y")
+            curr_price = hist['Close'].iloc[-1]
+            raw_vol, z_entropy = calculate_entropy(hist)
+            sma = hist['Close'].rolling(50).mean().iloc[-1]
+            trend = (curr_price - sma) / sma
+            beta = calculate_beta(hist, spy_hist)
+            psi = calculate_psi(z_entropy, 0, trend, risk_tolerance, global_penalty)
+            
+            status = "SÓLIDO"
+            if z_entropy > risk_tolerance: status = "GAS (RIESGO)"
+            elif trend > 0.02 and z_entropy < risk_tolerance: status = "LÍQUIDO (GROWTH)"
+            
+            action = "MANTENER"
+            if status == "GAS (RIESGO)": action = "REDUCIR"
+            elif status == "LÍQUIDO (GROWTH)": action = "AUMENTAR"
+            
+            results.append({"Ticker": t, "Weight": holdings[t], "Price": curr_price, "Beta": beta, "Entropy": z_entropy, "Psi": psi, "Status": status, "Action": action})
+        except: pass
+        
+    df_res = pd.DataFrame(results)
+    data_corr = yf.download(tickers, period="6mo")['Close'].pct_change().dropna()
+    corr_matrix = data_corr.corr()
+    port_beta = (df_res['Beta'] * df_res['Weight']).sum()
+    port_psi = (df_res['Psi'] * df_res['Weight']).sum()
+    
+    return df_res, corr_matrix, {"Beta": port_beta, "Psi": port_psi}
+
+# --- FUNCIÓN SCANNER ---
 @st.cache_data(ttl=300)
 def get_live_data(tickers_input, window_cfg, risk_tolerance):
     m_status, m_entropy, m_msg, _ = get_market_status()
@@ -180,7 +270,6 @@ def run_backtest(ticker, start, end, capital, risk_tolerance):
 
 # --- FUNCIÓN ORÁCULO ---
 def run_oracle_sim(ticker, days, risk_tolerance):
-    """Oráculo Estabilizado con Semilla (Seed) y Momentum Bias"""
     try:
         stock = yf.Ticker(ticker)
         hist = stock.history(period="1y")
@@ -197,7 +286,7 @@ def run_oracle_sim(ticker, days, risk_tolerance):
         trend_drift = trend_force / 252 * 2 
         final_drift = (hist_drift * 0.3) + (trend_drift * 0.7) if risk_tolerance >= 3 else hist_drift
         
-        # SEED ESTABILIZADOR
+        # Seed estabilizador
         unique_seed = int(sum(ord(c) for c in ticker) + days)
         np.random.seed(unique_seed)
 
@@ -212,46 +301,6 @@ def run_oracle_sim(ticker, days, risk_tolerance):
         return paths, proj_h, trend_force
     except: return None, 0, 0
 
-# --- FUNCIÓN PORTAFOLIO ---
-def analyze_portfolio(holdings, risk_tolerance):
-    m_status, m_entropy, m_msg, spy_hist = get_market_status()
-    global_penalty = 30 if m_status == "GAS" else 0
-    results = []
-    tickers = list(holdings.keys())
-    if 'CASH' in tickers: tickers.remove('CASH')
-    
-    if not tickers: return None, None, None
-    
-    for t in tickers:
-        try:
-            stock = yf.Ticker(t)
-            hist = stock.history(period="1y")
-            curr_price = hist['Close'].iloc[-1]
-            raw_vol, z_entropy = calculate_entropy(hist)
-            sma = hist['Close'].rolling(50).mean().iloc[-1]
-            trend = (curr_price - sma) / sma
-            beta = calculate_beta(hist, spy_hist)
-            psi = calculate_psi(z_entropy, 0, trend, risk_tolerance, global_penalty)
-            
-            status = "SÓLIDO"
-            if z_entropy > risk_tolerance: status = "GAS (RIESGO)"
-            elif trend > 0.02 and z_entropy < risk_tolerance: status = "LÍQUIDO (GROWTH)"
-            
-            action = "MANTENER"
-            if status == "GAS (RIESGO)": action = "REDUCIR"
-            elif status == "LÍQUIDO (GROWTH)": action = "AUMENTAR"
-            
-            results.append({"Ticker": t, "Weight": holdings[t], "Price": curr_price, "Beta": beta, "Entropy": z_entropy, "Psi": psi, "Status": status, "Action": action})
-        except: pass
-        
-    df_res = pd.DataFrame(results)
-    data_corr = yf.download(tickers, period="6mo")['Close'].pct_change().dropna()
-    corr_matrix = data_corr.corr()
-    port_beta = (df_res['Beta'] * df_res['Weight']).sum()
-    port_psi = (df_res['Psi'] * df_res['Weight']).sum()
-    
-    return df_res, corr_matrix, {"Beta": port_beta, "Psi": port_psi}
-
 # ==============================================================================
 # 3. INTERFAZ DE USUARIO (FRONT-END)
 # ==============================================================================
@@ -259,6 +308,7 @@ def analyze_portfolio(holdings, risk_tolerance):
 with st.sidebar:
     st.header("🏛️ SG CAPITAL | FAROS")
     app_mode = st.radio("SISTEMA:", [
+        "🌎 MACRO ECONOMÍA", 
         "💼 GESTIÓN PORTAFOLIOS", 
         "🔍 SCANNER MERCADO", 
         "⏳ BACKTEST LAB", 
@@ -273,9 +323,75 @@ with st.sidebar:
     st.caption(f"Límite Entropía: **{risk_sigma}σ**")
 
 # --------------------------------------------------------------------------
+# MÓDULO: MACRO ECONOMÍA
+# --------------------------------------------------------------------------
+if app_mode == "🌎 MACRO ECONOMÍA":
+    st.title("Observatorio Macroeconómico")
+    st.caption("Diagnóstico de salud económica y divisas basado en Teoría Arroyo (TAI).")
+    
+    c_sel, c_kpi = st.columns([1, 2])
+    country_sel = c_sel.selectbox("Seleccionar Jurisdicción:", 
+                                  ["USA", "MEXICO", "EUROPA", "CHINA", "BRASIL", "JAPON", "ARGENTINA"])
+    
+    if st.button("Escanear Economía"):
+        with st.spinner(f"Analizando indicadores de {country_sel}..."):
+            macro_data = analyze_country(country_sel)
+            oil = yf.Ticker("CL=F").history(period="5d")['Close'].iloc[-1]
+            tnx = yf.Ticker("^TNX").history(period="5d")['Close'].iloc[-1]
+        
+        if macro_data:
+            psi = macro_data['Macro_Score']
+            color_psi = "green" if psi > 60 else "orange" if psi > 40 else "red"
+            
+            st.markdown(f"""
+            <div class="macro-card">
+                <h3 style="margin:0; color:#555;">ÍNDICE DE SALUD MACRO ({macro_data['Name']})</h3>
+                <h1 style="margin:0; font-size:4rem; color:{color_psi};">{psi:.0f}/100</h1>
+                <p>Basado en desempeño de Mercado de Valores ({macro_data['ETF_Ticker']}) y Estabilidad Cambiaria ({macro_data['FX_Ticker']})</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            c1, c2, c3, c4 = st.columns(4)
+            etf_delta = f"{macro_data['ETF_Trend']*100:+.1f}%"
+            c1.metric("Mercado (Acciones)", f"${macro_data['ETF_Price']:.2f}", etf_delta)
+            
+            fx_val = macro_data['FX_Price']
+            fx_trend = macro_data['Local_FX_Trend']
+            c2.metric("Divisa vs USD", f"{fx_val:.2f}", f"{fx_trend*100:+.1f}%", delta_color="normal")
+            
+            c3.metric("Riesgo (Bono 10Y)", f"{tnx:.2f}%", "Tasa Libre Riesgo")
+            c4.metric("Energía (WTI)", f"${oil:.2f}", "Factor Inflación")
+            
+            st.subheader("Diagnóstico Táctico")
+            col_izq, col_der = st.columns(2)
+            
+            with col_izq:
+                st.markdown(f"#### 🏭 Sector Productivo ({macro_data['ETF_Ticker']})")
+                if macro_data['ETF_Trend'] > 0:
+                    st.success(f"**EN EXPANSIÓN:** El mercado de valores local muestra tendencia alcista. (Vol: {macro_data['ETF_Vol']:.1f}%)")
+                else:
+                    st.error(f"**EN CONTRACCIÓN:** Señal de posible desaceleración económica o fuga de capitales.")
+                    
+            with col_der:
+                st.markdown(f"#### 💱 Mercado Cambiario ({macro_data['FX_Ticker']})")
+                if macro_data['Local_FX_Trend'] > 0:
+                    st.success(f"**MONEDA FUERTE:** La divisa local se está apreciando frente al dólar.")
+                else:
+                    st.warning(f"**DEVALUACIÓN:** La moneda local pierde valor. Riesgo inflacionario.")
+
+            st.subheader("Dinámica Mercado vs Divisa")
+            etf_hist = yf.Ticker(macro_data['ETF_Ticker']).history(period="1y")['Close']
+            fx_hist = yf.Ticker(macro_data['FX_Ticker']).history(period="1y")['Close']
+            df_chart = pd.DataFrame()
+            df_chart['Mercado'] = (etf_hist / etf_hist.iloc[0]) * 100
+            df_chart['Tipo de Cambio'] = (fx_hist / fx_hist.iloc[0]) * 100
+            fig = px.line(df_chart, title="Correlación: Bolsa (Acciones) vs Tipo de Cambio")
+            st.plotly_chart(fig, use_container_width=True)
+
+# --------------------------------------------------------------------------
 # MÓDULO: GESTIÓN DE PORTAFOLIOS
 # --------------------------------------------------------------------------
-if app_mode == "💼 GESTIÓN PORTAFOLIOS":
+elif app_mode == "💼 GESTIÓN PORTAFOLIOS":
     st.title("Gestión de Activos & Riesgo")
     st.caption("Análisis agregado de exposiciones, correlaciones y cumplimiento de teoría TAI.")
     
