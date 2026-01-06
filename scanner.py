@@ -1,7 +1,7 @@
 # ==============================================================================
-# FAROS v7.0 - MULTI-TIMEFRAME & EDUCATION
+# FAROS v7.2 - INTELLIGENCE PLATFORM (FINAL PRODUCTION)
 # Autor: Juan Arroyo | SG Consulting Group
-# Novedades: Selector de Temporalidad + Explicación Teórica
+# Características: Diseño Nativo, Multi-Frame, Lógica "Growth Exception"
 # ==============================================================================
 
 import streamlit as st
@@ -10,29 +10,30 @@ import numpy as np
 import plotly.express as px
 import yfinance as yf
 
-# 1. CONFIGURACIÓN (Limpia y Blanca)
+# --- 1. CONFIGURACIÓN VISUAL (MODO LIMPIO) ---
 st.set_page_config(page_title="FAROS | TAI-ACF", page_icon="📡", layout="wide")
 
+# CSS Mínimo para forzar limpieza visual
 st.markdown("""
 <style>
     .stApp { background-color: #FFFFFF; color: #111; }
     h1, h2, h3 { color: #000 !important; }
-    .stExpander { border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    /* Ajuste sutil para las métricas */
+    div[data-testid="stMetricValue"] { font-size: 1.1rem; }
+    div[data-testid="stMetricLabel"] { font-size: 0.8rem; color: #666; }
 </style>
 """, unsafe_allow_html=True)
 
-# 2. MOTOR LÓGICO DINÁMICO (Se adapta a la temporalidad)
-# ... (El resto de imports y configuración queda igual) ...
-
+# --- 2. MOTOR LÓGICO TAI-ACF (CALIBRADO) ---
 @st.cache_data(ttl=300)
 def get_quant_data(tickers_input, window_cfg):
     tickers_list = [x.strip().upper() for x in tickers_input.split(',')]
     data_list = []
     
-    # Configuración de ventanas
-    w_calc = window_cfg['volatility'] # Días para calcular la desviación (ej. 10 o 200)
-    w_trend = window_cfg['trend']
-    period_dl = window_cfg['download']
+    # Desempaquetar configuración de ventanas (Timeframe)
+    w_calc = window_cfg['volatility'] # Días para cálculo de volatilidad
+    w_trend = window_cfg['trend']     # Días para tendencia (SMA)
+    period_dl = window_cfg['download'] # Cuanta data bajar de Yahoo
 
     for ticker in tickers_list:
         try:
@@ -42,171 +43,198 @@ def get_quant_data(tickers_input, window_cfg):
             if len(hist) > w_trend:
                 current_price = hist['Close'].iloc[-1]
                 
-                # --- CORRECCIÓN MATEMÁTICA AQUÍ ---
+                # --- A. CÁLCULO DE ENTROPÍA (RIESGO) ---
                 returns = hist['Close'].pct_change().dropna()
                 
-                # 1. Calculamos la volatilidad de la ventana seleccionada (ej. últimos 20 días)
-                # 2. La ANUALIZAMOS siempre (* sqrt(252)) para estandarizar la escala
-                # Esto evita que ventanas largas den números gigantes.
+                # Tomamos la volatilidad de la ventana seleccionada (ej. 20 días)
+                # IMPORTANTE: La anualizamos (* sqrt(252)) para que la escala sea universal
                 subset_returns = returns.tail(w_calc)
                 if len(subset_returns) > 1:
                     vol_annualized = subset_returns.std() * np.sqrt(252) * 100
                 else:
                     vol_annualized = 0
                 
-                # CALIBRACIÓN DE ENTROPÍA (Z-Score)
-                # Base del mercado: Una acción "normal" tiene 20-25% de volatilidad anual.
-                # Si NVDA tiene 60% anual, el Z será aprox 2.0 (Alto).
-                # Si tiene 90% (Crash), el Z será 3.5+.
-                # Ya no te dará 6.0 a menos que sea el fin del mundo.
+                # Z-Score calibrado: (Volatilidad - Base 20%) / Desviación 15%
                 z_entropy = (vol_annualized - 20) / 15 
                 
-                # --- FIN CORRECCIÓN ---
-
-                # B. LIQUIDEZ (L) - Momentum de Volumen relativo
+                # --- B. CÁLCULO DE LIQUIDEZ (ENERGÍA) ---
+                # Comparamos volumen actual vs media de la ventana
                 vol_avg = hist['Volume'].rolling(w_calc).mean().iloc[-1]
                 curr_vol = hist['Volume'].iloc[-1]
                 z_liquidity = (curr_vol - vol_avg) / vol_avg if vol_avg > 0 else 0
                 
-                # C. TENDENCIA
+                # --- C. CÁLCULO DE TENDENCIA (GOBERNANZA) ---
                 sma_trend = hist['Close'].rolling(w_trend).mean().iloc[-1]
                 trend_strength = (current_price - sma_trend) / sma_trend
                 
-                # Lógica de Señales Ajustada
+                # --- D. ÁRBOL DE DECISIÓN (ALGORITMO) ---
                 signal = "MANTENER"
-                category = "neutral" 
-                narrative = "Equilibrio. Volatilidad dentro de rangos normales."
+                category = "neutral" # Gris
+                narrative = "Consolidación. Sin catalizadores claros en este horizonte."
 
-                # Umbrales recalibrados para Z anualizado
-                if z_entropy > 2.0: # Equivale a >50% Volatilidad Anual
-                    signal = "NO OPERAR"
-                    category = "danger"
-                    narrative = f"⚠️ Alta Entropía ({z_entropy:.1f}σ). Volatilidad anualizada excesiva ({vol_annualized:.0f}%)."
+                # 1. FILTRO DE ENTROPÍA
+                if z_entropy > 2.0:
+                    # LA EXCEPCIÓN "PLTR": ¿Es caos o es crecimiento explosivo?
+                    if trend_strength > 0.10 and z_liquidity > 0:
+                        signal = "GROWTH AGRESIVO"
+                        category = "warning" # Amarillo
+                        narrative = f"⚡ Alta Volatilidad ({z_entropy:.1f}σ) impulsada por tendencia fuerte. Potencial explosivo (High Risk/Reward)."
+                    else:
+                        signal = "RIESGO ALTO"
+                        category = "danger" # Rojo
+                        narrative = f"⚠️ Estructura Rota. Entropía excesiva ({z_entropy:.1f}σ) sin dirección clara. No operar."
                 
+                # 2. SEÑALES DE SALIDA
                 elif z_liquidity < -0.2 and trend_strength < -0.05:
                     signal = "VENTA / SALIDA"
-                    category = "warning"
-                    narrative = "📉 Divergencia bajista. Precio cae con validación de volumen."
+                    category = "warning" # Naranja (usamos warning visualmente)
+                    narrative = "📉 Distribución. El precio cae con volumen confirmando la salida."
                 
+                # 3. SEÑALES DE ENTRADA
                 elif trend_strength > 0.02 and z_entropy < 1.5:
                     if z_liquidity > 0.15:
                         signal = "COMPRA FUERTE"
-                        category = "success"
-                        narrative = f"🚀 Fase Líquida. Estructura ordenada con inyección de capital (+{z_liquidity*100:.0f}%)."
+                        category = "success" # Verde
+                        narrative = f"🚀 Fase Líquida Pura. Convergencia de estabilidad y entrada masiva de dinero (+{z_liquidity*100:.0f}%)."
                     else:
                         signal = "ACUMULAR"
-                        category = "info"
-                        narrative = "📈 Tendencia alcista sólida. Volatilidad controlada."
+                        category = "info" # Azul
+                        narrative = "📈 Tendencia alcista sana. Zona ideal para construir posición escalonada."
 
                 data_list.append({
-                    "Ticker": ticker, "Price": current_price, "Signal": signal, 
-                    "Category": category, "Narrative": narrative,
-                    "Entropy": z_entropy, "Liquidity": z_liquidity, "Trend": trend_strength * 100
+                    "Ticker": ticker, 
+                    "Price": current_price, 
+                    "Signal": signal, 
+                    "Category": category, 
+                    "Narrative": narrative,
+                    "Entropy": z_entropy, 
+                    "Liquidity": z_liquidity, 
+                    "Trend": trend_strength * 100,
+                    "Vol_Ann": vol_annualized
                 })
-        except Exception as e:
-            pass
+        except Exception:
+            pass # Si falla un ticker, continuamos con el siguiente
 
     df = pd.DataFrame(data_list)
     if not df.empty:
-        prio = {"success": 0, "info": 1, "neutral": 2, "warning": 3, "danger": 4}
+        # Ordenar por prioridad de acción: Success (0) -> Info (1) -> Warning (2) -> Danger (3) -> Neutral (4)
+        # Ajustamos el mapa para que 'Warning' (Growth) salga antes que 'Danger'
+        prio = {"success": 0, "info": 1, "warning": 2, "neutral": 3, "danger": 4}
         df['P'] = df['Category'].map(prio)
         df = df.sort_values('P')
     return df
 
-# ... (El resto del código de UI se mantiene igual) ...
-
-# 3. BARRA LATERAL (CONTROLES)
+# --- 3. BARRA LATERAL (CONTROLES) ---
 with st.sidebar:
     st.header("📡 CONFIGURACIÓN")
     
-    # SELECTOR DE TIEMPO (NUEVO)
+    # Selector de Temporalidad
     time_horizon = st.selectbox(
-        "⏱️ Horizonte de Análisis",
+        "⏱️ Horizonte de Inversión",
         ("Corto Plazo (Trading)", "Medio Plazo (Swing)", "Largo Plazo (Inversión)")
     )
     
-    # Lógica de configuración según selección
+    # Lógica de configuración de ventanas
     if "Corto" in time_horizon:
+        # Muy reactivo: 10 días volatilidad, 20 días tendencia
         window_config = {'volatility': 10, 'trend': 20, 'download': '3mo', 'desc': 'Días a Semanas'}
     elif "Medio" in time_horizon:
+        # Estándar: 20 días volatilidad (mensual), 50 días tendencia
         window_config = {'volatility': 20, 'trend': 50, 'download': '6mo', 'desc': 'Semanas a Meses'}
-    else: # Largo
+    else: 
+        # Inversión: 60 días volatilidad (trimestral), 200 días tendencia
         window_config = {'volatility': 60, 'trend': 200, 'download': '2y', 'desc': 'Meses a Años'}
         
-    st.info(f"Análisis ajustado para ventanas de: **{window_config['desc']}**")
+    st.caption(f"Ventanas ajustadas para: {window_config['desc']}")
     
-    tickers = st.text_area("Cartera:", "PLTR, CVX, BTC-USD, SPY, TSLA, AMTB", height=150)
-    if st.button("Ejecutar Análisis", type="primary"): st.cache_data.clear()
+    st.markdown("---")
+    tickers = st.text_area("Cartera de Vigilancia:", 
+                          "PLTR, BTC-USD, CVX, SPY, TSLA, AMTB, NVDA, MELI", 
+                          height=150)
+    
+    if st.button("Ejecutar Análisis", type="primary"): 
+        st.cache_data.clear()
 
-# 4. ÁREA PRINCIPAL
+# --- 4. ÁREA PRINCIPAL ---
 st.title("Panel de Inteligencia TAI-ACF")
 
-# --- MÓDULO EDUCATIVO (NUEVO) ---
-with st.expander("📘 Guía Teórica: ¿Cómo interpreta FAROS el mercado?"):
+# Módulo Educativo (Desplegable)
+with st.expander("📘 Guía Teórica: Entendiendo los Indicadores"):
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.markdown("### 🎲 Entropía ($H$)")
-        st.markdown("""
-        Mide el **Caos y el Riesgo**. 
-        * Una entropía alta significa que el precio es impredecible (Fase Gaseosa).
-        * Buscamos entropía baja para operar con seguridad.
-        """)
+        st.markdown("**🎲 Entropía (Riesgo)**")
+        st.caption("Mide el caos. Valores altos (>2.0σ) indican inestabilidad, a menos que sea crecimiento explosivo.")
     with c2:
-        st.markdown("### 🌊 Liquidez ($L$)")
-        st.markdown("""
-        Mide la **Energía y el Flujo**.
-        * Es el combustible del movimiento. 
-        * Si el precio sube sin liquidez, es una trampa (Plasma).
-        * Necesitamos volumen creciente para confirmar tendencias.
-        """)
+        st.markdown("**🌊 Liquidez (Energía)**")
+        st.caption("Mide el flujo de dinero. Necesitamos valores positivos para confirmar que la subida es real.")
     with c3:
-        st.markdown("### 🧠 Gobernanza ($\Psi$)")
-        st.markdown("""
-        Es la **Señal de Decisión**.
-        * El algoritmo combina $H$ y $L$.
-        * Si el mercado está ordenado ($H$ baja) y hay energía ($L$ alta), la Gobernanza autoriza la **COMPRA**.
-        """)
+        st.markdown("**🧠 Gobernanza (Señal)**")
+        st.caption("La decisión final del algoritmo basada en su horizonte temporal seleccionado.")
 
 st.markdown("---")
 
-# EJECUCIÓN DEL MODELO
+# Ejecución
 df = get_quant_data(tickers, window_config)
 
 if not df.empty:
-    col_list, col_radar = st.columns([1.5, 1])
+    # Diseño: Lista de Recomendaciones (Izquierda) + Radar (Derecha)
+    col_list, col_radar = st.columns([1.6, 1])
     
+    # --- SECCIÓN DERECHA: RADAR VISUAL ---
     with col_radar:
-        st.subheader(f"🧭 Radar ({window_config['desc']})")
+        st.subheader("🧭 Radar de Fases")
         fig = px.scatter(df, x="Entropy", y="Liquidity", color="Category", text="Ticker",
-                         color_discrete_map={"success":"#28a745", "info":"#17a2b8", "neutral":"#6c757d", "warning":"#ffc107", "danger":"#dc3545"},
-                         labels={"Entropy": "Caos (Riesgo)", "Liquidity": "Flujo (Energía)"})
-        fig.update_layout(template="plotly_white", height=400, showlegend=False)
+                         color_discrete_map={
+                             "success":"#28a745", # Verde
+                             "info":"#17a2b8",    # Azul
+                             "neutral":"#6c757d", # Gris
+                             "warning":"#ffc107", # Amarillo/Naranja
+                             "danger":"#dc3545"   # Rojo
+                         },
+                         labels={"Entropy": "Caos / Riesgo (σ)", "Liquidity": "Flujo de Dinero"})
+        
+        fig.update_layout(template="plotly_white", height=450, showlegend=False)
+        fig.update_traces(textposition='top center', marker=dict(size=12, line=dict(width=1, color='DarkSlateGrey')))
+        
+        # Zonas de referencia visual
+        fig.add_vline(x=2.0, line_width=1, line_dash="dash", line_color="red", opacity=0.3)
+        fig.add_hline(y=0, line_width=1, line_dash="dash", line_color="gray", opacity=0.3)
+        
         st.plotly_chart(fig, use_container_width=True)
-        st.caption(f"*Mapa calculado con ventanas de volatilidad de {window_config['volatility']} días.*")
+        st.info(f"Visualizando horizonte de **{time_horizon}**.")
 
+    # --- SECCIÓN IZQUIERDA: TARJETAS DE ACCIÓN ---
     with col_list:
         st.subheader("📋 Matriz de Decisión")
         
         for i, row in df.iterrows():
+            # Contenedor con borde (Diseño Nativo Limpio)
             with st.container(border=True):
-                c1, c2 = st.columns([3, 1])
-                c1.markdown(f"### **{row['Ticker']}**") 
-                c2.markdown(f"### ${row['Price']:.2f}")
                 
+                # Cabecera: Ticker y Precio
+                head_c1, head_c2 = st.columns([3, 1])
+                head_c1.markdown(f"### **{row['Ticker']}**") 
+                head_c2.markdown(f"### ${row['Price']:,.2f}")
+                
+                # Métricas Clave
                 m1, m2, m3 = st.columns(3)
-                m1.metric("Entropía", f"{row['Entropy']:.1f}σ")
-                m2.metric("Liquidez", f"{row['Liquidity']*100:+.0f}%")
+                m1.metric("Entropía (Vol)", f"{row['Entropy']:.1f}σ", help=f"Volatilidad Anualizada: {row['Vol_Ann']:.0f}%")
+                m2.metric("Liquidez", f"{row['Liquidity']*100:+.0f}%", delta_color="normal")
                 m3.metric("Tendencia", f"{row['Trend']:+.1f}%")
                 
-                # Mensaje dinámico según temporalidad
-                msg = f"**{row['Signal']} ({window_config['desc']}):** {row['Narrative']}"
+                # Mensaje de IA (Alertas Nativas)
+                msg = f"**{row['Signal']}:** {row['Narrative']}"
                 
-                if row['Category'] == 'success': st.success(msg, icon="✅")
-                elif row['Category'] == 'info': st.info(msg, icon="ℹ️")
-                elif row['Category'] == 'warning': st.warning(msg, icon="⚠️")
-                elif row['Category'] == 'danger': st.error(msg, icon="⛔")
-                else: st.write(msg)
+                if row['Category'] == 'success':
+                    st.success(msg, icon="✅")
+                elif row['Category'] == 'info':
+                    st.info(msg, icon="ℹ️")
+                elif row['Category'] == 'warning':
+                    st.warning(msg, icon="⚠️") # Cubre tanto "Venta" como "Growth Agresivo"
+                elif row['Category'] == 'danger':
+                    st.error(msg, icon="⛔")
+                else:
+                    st.write(msg)
 
 else:
-    st.info("Cargando datos... un momento.")
-
+    st.info("⏳ Inicializando sistemas... Por favor espere un momento.")
