@@ -1,7 +1,7 @@
 # ==============================================================================
-# FAROS v20.0 - MASTER SUITE (TAI ALLOCATION ENGINE)
+# FAROS v21.0 - MASTER SUITE (STABLE RELEASE)
 # Autor: Juan Arroyo | SG Consulting Group & Emporium
-# Novedades: Asignación de Capital Inteligente basada en Score Psi
+# Fixes: Persistencia de Reportes, Gráfico Oráculo Completo, Manejo de Nulls
 # ==============================================================================
 
 import streamlit as st
@@ -93,15 +93,12 @@ def get_market_status():
     except: return "UNKNOWN", 0, "Desconectado", pd.DataFrame()
 
 # ==============================================================================
-# 2. MOTOR DE ASIGNACIÓN TAI (NUEVO)
+# 2. MOTOR DE ASIGNACIÓN TAI
 # ==============================================================================
 
 def calculate_tai_weights(tickers, risk_tolerance):
-    """Calcula la distribución óptima de pesos basada en Score Psi."""
     scores = {}
     valid_tickers = []
-    
-    # Obtener estado global para penalizaciones
     m_status, _, _, _ = get_market_status()
     global_penalty = 30 if m_status == "GAS" else 0
 
@@ -112,38 +109,27 @@ def calculate_tai_weights(tickers, risk_tolerance):
                 raw_vol, z_entropy = calculate_entropy(hist)
                 sma = hist['Close'].rolling(50).mean().iloc[-1]
                 trend = (hist['Close'].iloc[-1] - sma) / sma
-                
-                # Calcular PSI
                 psi = calculate_psi(z_entropy, 0, trend, risk_tolerance, global_penalty)
                 
-                # REGLA DE ASIGNACIÓN TAI:
-                # 1. Si es GAS (Riesgo Extremo), peso tiende a 0.
-                # 2. El peso es proporcional al Score Psi al cuadrado (para premiar a los mejores).
-                
-                if z_entropy > risk_tolerance:
-                    weight_score = 0 # Penalización total a fase gaseosa
-                else:
-                    weight_score = psi if psi > 0 else 0
+                if z_entropy > risk_tolerance: weight_score = 0 
+                else: weight_score = psi if psi > 0 else 0
                 
                 scores[t] = weight_score
                 valid_tickers.append(t)
         except: pass
     
     total_score = sum(scores.values())
-    
     weights_str = ""
     if total_score > 0:
         for t in valid_tickers:
             w = scores[t] / total_score
             weights_str += f"{t}, {w:.2f}\n"
     else:
-        # Fallback si todo es 0 (Mercado en colapso total)
         weights_str = "\n".join([f"{t}, {1/len(tickers):.2f}" for t in tickers])
-        
     return weights_str
 
 # ==============================================================================
-# 3. GENERADORES DE REPORTES
+# 3. GENERADORES DE REPORTES (FIXED)
 # ==============================================================================
 
 def get_ecuador_time():
@@ -254,22 +240,25 @@ def analyze_portfolio(holdings, risk_tolerance):
         try:
             stock = yf.Ticker(t)
             hist = stock.history(period="1y")
-            curr_price = hist['Close'].iloc[-1]
-            raw_vol, z_entropy = calculate_entropy(hist)
-            sma = hist['Close'].rolling(50).mean().iloc[-1]
-            trend = (curr_price - sma) / sma
-            beta = calculate_beta(hist, spy_hist)
-            psi = calculate_psi(z_entropy, 0, trend, risk_tolerance, global_penalty)
-            status = "SÓLIDO"
-            if z_entropy > risk_tolerance: status = "GAS (RIESGO)"
-            elif trend > 0.02 and z_entropy < risk_tolerance: status = "LÍQUIDO (GROWTH)"
-            action = "MANTENER"
-            if status == "GAS (RIESGO)": action = "REDUCIR"
-            elif status == "LÍQUIDO (GROWTH)": action = "AUMENTAR"
-            results.append({"Ticker": t, "Weight": holdings[t], "Price": curr_price, "Beta": beta, "Entropy": z_entropy, "Psi": psi, "Status": status, "Action": action})
+            if not hist.empty: # FIX: Check empty
+                curr_price = hist['Close'].iloc[-1]
+                raw_vol, z_entropy = calculate_entropy(hist)
+                sma = hist['Close'].rolling(50).mean().iloc[-1]
+                trend = (curr_price - sma) / sma
+                beta = calculate_beta(hist, spy_hist)
+                psi = calculate_psi(z_entropy, 0, trend, risk_tolerance, global_penalty)
+                status = "SÓLIDO"
+                if z_entropy > risk_tolerance: status = "GAS (RIESGO)"
+                elif trend > 0.02 and z_entropy < risk_tolerance: status = "LÍQUIDO (GROWTH)"
+                action = "MANTENER"
+                if status == "GAS (RIESGO)": action = "REDUCIR"
+                elif status == "LÍQUIDO (GROWTH)": action = "AUMENTAR"
+                results.append({"Ticker": t, "Weight": holdings[t], "Price": curr_price, "Beta": beta, "Entropy": z_entropy, "Psi": psi, "Status": status, "Action": action})
         except: pass
-    df_res = pd.DataFrame(results)
     
+    if not results: return None, pd.DataFrame(), {"Beta":0, "Psi":0}
+
+    df_res = pd.DataFrame(results)
     try:
         data_corr = yf.download(tickers, period="6mo")['Close'].pct_change().dropna()
         corr_matrix = data_corr.corr()
@@ -395,31 +384,26 @@ if app_mode == "🌎 MACRO ECONOMÍA":
             st.plotly_chart(px.line(df_ch), use_container_width=True)
 
 # --------------------------------------------------------------------------
-# MÓDULO: PORTAFOLIO (NUEVA ASIGNACIÓN TAI)
+# MÓDULO: PORTAFOLIO
 # --------------------------------------------------------------------------
 elif app_mode == "💼 GESTIÓN PORTAFOLIOS":
     st.title("Gestión de Activos & Riesgo")
     
     with st.expander("📝 Editar Composición del Portafolio", expanded=True):
         c1, c2 = st.columns(2)
-        # 1. SELECCIÓN ACTIVOS
         sel_assets = c1.multiselect("Seleccionar Activos:", options=list(ASSET_DB.keys()), default=["PALANTIR (PLTR)", "NVIDIA (NVDA)"])
         manual_assets = c1.text_input("Otros Tickers (separados por coma):", "")
         
-        # 2. CALCULAR TAI (NUEVO)
         if c1.button("⚡ Auto-Balancear (Criterio TAI)"):
-            with st.spinner("Calculando asignación óptima basada en Termodinámica (Psi)..."):
+            with st.spinner("Calculando asignación óptima..."):
                 final_tickers = get_tickers_from_selection(sel_assets, manual_assets)
                 recommended_weights = calculate_tai_weights(final_tickers, risk_sigma)
                 st.session_state['weights_area'] = recommended_weights
         
-        # 3. AREA DE PESOS (EDITABLE)
         default_val = st.session_state.get('weights_area', "")
         if not default_val:
-            # Si está vacío, por defecto igual ponderación
             final_tickers = get_tickers_from_selection(sel_assets, manual_assets)
-            if final_tickers:
-                default_val = "\n".join([f"{t}, {1/len(final_tickers):.2f}" for t in final_tickers])
+            if final_tickers: default_val = "\n".join([f"{t}, {1/len(final_tickers):.2f}" for t in final_tickers])
 
         weights_input = c2.text_area("Distribución de Capital (Ticker, Peso):", value=default_val, height=150)
         
@@ -435,7 +419,6 @@ elif app_mode == "💼 GESTIÓN PORTAFOLIOS":
             st.markdown("### 📊 Termodinámica del Portafolio")
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("Activos", len(df_p)); k2.metric("Beta", f"{metrics['Beta']:.2f}x"); k3.metric("Score TAI", f"{metrics['Psi']:.0f}/100"); k4.metric("Estado", "LÍQUIDO" if metrics['Psi']>50 else "GASEOSO")
-            
             if not corr_m.empty: st.plotly_chart(px.imshow(corr_m, text_auto=True, color_continuous_scale='RdBu_r'), use_container_width=True)
             
             st.subheader("🚨 Alertas Tácticas")
@@ -453,7 +436,7 @@ elif app_mode == "💼 GESTIÓN PORTAFOLIOS":
             with st.expander("📄 Detalle Técnico"): st.dataframe(df_p)
 
 # --------------------------------------------------------------------------
-# MÓDULO: SCANNER
+# MÓDULO: SCANNER (PERSISTENCE FIX)
 # --------------------------------------------------------------------------
 elif app_mode == "🔍 SCANNER MERCADO":
     time_h = st.selectbox("Horizonte", ["Corto Plazo", "Medio Plazo", "Largo Plazo"])
@@ -469,14 +452,26 @@ elif app_mode == "🔍 SCANNER MERCADO":
         st.cache_data.clear()
         target_list = get_tickers_from_selection(selected_assets, manual_tickers)
         df, m_status, m_entropy, m_msg = get_live_data(target_list, cfg, risk_sigma)
+        
+        # SAVE TO SESSION
+        st.session_state['scan_data'] = df
+        st.session_state['scan_meta'] = (m_status, m_entropy, m_msg)
+    
+    # RENDER FROM SESSION
+    if 'scan_data' in st.session_state:
+        df = st.session_state['scan_data']
+        m_status, m_entropy, m_msg = st.session_state['scan_meta']
+        
         cols = {"GAS":("#FFCDD2","#B71C1C","🔥"), "WARNING":("#FFF9C4","#F57F17","⚠️"), "LIQUID":("#C8E6C9","#1B5E20","🌍")}
         bg, txt, ico = cols.get(m_status, ("#eee","#333","❓"))
+        
         st.markdown(f"<div class='global-status' style='background-color:{bg}; color:{txt};'>{ico} SPY: {m_msg}</div>", unsafe_allow_html=True)
         
         if not df.empty:
             if st.button("🖨️ Generar Informe de Oportunidades"):
                 scan_html = generate_scanner_report(df, m_status, risk_profile)
                 st.download_button("Descargar Informe (HTML)", scan_html, "escaneo_faros.html", "text/html")
+            
             c1, c2 = st.columns([2,1])
             with c2: st.plotly_chart(px.scatter(df, x="Entropy", y="Liquidity", color="Category", text="Ticker"), use_container_width=True)
             with c1:
@@ -488,7 +483,8 @@ elif app_mode == "🔍 SCANNER MERCADO":
                         elif r['Category']=='warning': st.warning(msg)
                         elif r['Category']=='danger': st.error(msg)
                         else: st.info(msg)
-                        with st.expander("🔬 Lab Data"): st.markdown(f"**Vol:** {r['Raw_Vol']:.0f}% ({r['Entropy']:.2f}σ) | **Tendencia:** {r['Trend']:+.1f}% | **Liq:** {r['Raw_Vol_Ratio']:.1f}x")
+                        with st.expander("🔬 Lab Data"):
+                            st.markdown(f"**Vol:** {r['Raw_Vol']:.0f}% ({r['Entropy']:.2f}σ) | **Tendencia:** {r['Trend']:+.1f}% | **Liq:** {r['Raw_Vol_Ratio']:.1f}x")
 
 # --------------------------------------------------------------------------
 # MÓDULO: BACKTEST
@@ -513,7 +509,7 @@ elif app_mode == "⏳ BACKTEST LAB":
             st.plotly_chart(fig2, use_container_width=True)
 
 # --------------------------------------------------------------------------
-# MÓDULO: ORÁCULO
+# MÓDULO: ORÁCULO (FIXED CHART)
 # --------------------------------------------------------------------------
 elif app_mode == "🔮 ORÁCULO FUTURO":
     st.title("Proyección TAI (Potencial Φ)")
@@ -530,8 +526,21 @@ elif app_mode == "🔮 ORÁCULO FUTURO":
             st.markdown(f"<div style='text-align:center; padding:15px; border:1px solid #ddd; border-radius:10px; background-color:#f9f9f9;'><h2 style='margin:0;'>POTENCIAL FUTURO (Φ)</h2><h1 style='margin:0; font-size:4rem; color:{p_col};'>{phi:.0f}/100</h1><p>Probabilidad: <b>{win_rate*100:.0f}%</b> | R/R: <b>{rr:.1f}x</b></p></div>", unsafe_allow_html=True)
             k1, k2, k3 = st.columns(3); k1.metric("🟢 Techo", f"${p95:.2f}"); k2.metric("🔵 Base", f"${p50:.2f}"); k3.metric("🔴 Suelo", f"${p05:.2f}")
             with st.expander("📖 Interpretación Táctica de Escenarios", expanded=True):
-                st.markdown("""* **🟢 Techo (Optimista):** Rendimiento excepcional (Top 5% de probabilidad). Si llega aquí, es un 'Moonshot'.\n* **🔵 Base (Probable):** Mediana estadística. Si la inercia actual se mantiene, el precio orbitará esta zona.\n* **🔴 Suelo (Riesgo):** Escenario de Cisne Negro (Peor 5%). Este nivel marca tu **Riesgo Máximo Probable**.""")
+                st.markdown("""
+                * **🟢 Techo (Optimista):** Rendimiento excepcional (Top 5% de probabilidad). Si llega aquí, es un 'Moonshot'.
+                * **🔵 Base (Probable):** Mediana estadística. Si la inercia actual se mantiene, el precio orbitará esta zona.
+                * **🔴 Suelo (Riesgo):** Escenario de Cisne Negro (Peor 5%). Este nivel marca tu **Riesgo Máximo Probable**.
+                """)
+            
+            # --- FIXED PLOTLY CHART (Explicit Traces) ---
             fig = go.Figure()
+            # Gray simulations
             for i in range(50): fig.add_trace(go.Scatter(y=paths[:, i], line=dict(color='gray', width=0.5), opacity=0.1, showlegend=False))
+            # Green (Optimista)
+            fig.add_trace(go.Scatter(y=np.percentile(paths, 95, axis=1), name='Optimista', line=dict(color='green', dash='dash', width=2)))
+            # Blue (Trend)
             fig.add_trace(go.Scatter(y=np.percentile(paths, 50, axis=1), name='Tendencia', line=dict(color='blue', width=3)))
+            # Red (Pesimista)
+            fig.add_trace(go.Scatter(y=np.percentile(paths, 5, axis=1), name='Pesimista', line=dict(color='red', dash='dash', width=2)))
+            
             st.plotly_chart(fig, use_container_width=True)
