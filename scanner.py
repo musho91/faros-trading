@@ -1,6 +1,7 @@
 # ==============================================================================
-# FAROS v3.1 - THE CALIBRATED SUITE
-# Autor: Juan Arroyo | SG Consulting Group & Emporium
+# FAROS v4.0 - THE MASTER SUITE (OPTIMIZED)
+# Autor: Juan Arroyo | SG Consulting Group
+# Motor Físico: v4.0 (Super-Laminar Logic)
 # ==============================================================================
 
 import streamlit as st
@@ -9,28 +10,32 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 import yfinance as yf
+import requests_cache
 from datetime import datetime, timedelta
 from physics_engine import FarosPhysics 
 
-# Instancia Global
+# --- CONFIGURACIÓN ANTI-BLOQUEO YAHOO ---
+session = requests_cache.CachedSession('yfinance.cache')
+session.headers['User-agent'] = 'my-program/1.0'
+
+# Instancia Física
 fisica = FarosPhysics()
 
 # --- CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="FAROS v3.1 | Calibrated", page_icon="📡", layout="wide")
+st.set_page_config(page_title="FAROS v4.0", page_icon="📡", layout="wide")
 st.markdown("""
 <style>
     .stApp { background-color: #FFFFFF; color: #111; }
     h1, h2, h3 { color: #0E1117 !important; } 
-    .stExpander { border: 1px solid #ddd; background-color: #f8f9fa; border-radius: 8px; }
-    .global-status { padding: 15px; border-radius: 8px; margin-bottom: 20px; font-weight: bold; text-align: center; border: 1px solid #ddd; }
-    div[data-testid="stMetricValue"] { font-size: 1.4rem; }
-    .macro-card { padding: 20px; background-color: #f8f9fa; border-radius: 10px; border: 1px solid #ddd; margin-bottom: 20px; text-align: center; }
+    .metric-card { background-color: #f8f9fa; border: 1px solid #ddd; padding: 15px; border-radius: 10px; text-align: center; }
+    .status-badge { padding: 5px 10px; border-radius: 5px; font-weight: bold; color: white; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 0. BASE DE DATOS & UTILIDADES
+# 0. BASE DE DATOS
 # ==============================================================================
+# Claves EXACTAS para evitar errores de Streamlit
 ASSET_DB = {
     "PALANTIR (PLTR)": "PLTR", "NVIDIA (NVDA)": "NVDA", "D-WAVE (QBTS)": "QBTS", 
     "TESLA (TSLA)": "TSLA", "APPLE (AAPL)": "AAPL", "MICROSOFT (MSFT)": "MSFT", 
@@ -41,293 +46,304 @@ ASSET_DB = {
     "NETFLIX (NFLX)": "NFLX", "DISNEY (DIS)": "DIS", "VISA (V)": "V"
 }
 
-def get_tickers_from_selection(selection, manual_input):
-    selected = [ASSET_DB[k] for k in selection]
-    if manual_input:
-        manual_list = [x.strip().upper() for x in manual_input.split(',')]
-        selected.extend(manual_list)
-    return list(set(selected)) 
+def get_ticker_symbol(option_key):
+    return ASSET_DB.get(option_key, option_key)
 
 def get_ecuador_time():
-    return (datetime.utcnow() - timedelta(hours=5)).strftime("%Y-%m-%d %H:%M:%S (Quito/EC)")
+    return (datetime.utcnow() - timedelta(hours=5)).strftime("%Y-%m-%d %H:%M:%S")
 
 # ==============================================================================
-# 1. CORE v3.1: INTEGRACIÓN FÍSICA
+# 1. FUNCIONES CORE (CACHED)
 # ==============================================================================
+
+@st.cache_data(ttl=600) # Cache de 10 minutos para evitar rate limits
+def download_data(ticker, period="1y"):
+    try:
+        # Usamos session para evitar bloqueos
+        dat = yf.Ticker(ticker, session=session).history(period=period)
+        return dat
+    except: return pd.DataFrame()
 
 @st.cache_data(ttl=300)
 def get_market_status():
     try:
-        spy = yf.Ticker("SPY").history(period="6mo")
+        spy = download_data("SPY", "6mo")
         if spy.empty: return "UNKNOWN", 0, "Error Data", pd.DataFrame()
         re, h, psi, estado = fisica.calcular_hidrodinamica(spy)
+        
         msg = f"Re: {re:.0f} ({estado})"
-        if estado == "TURBULENTO": return "GAS", h, "CRASH ALERT: " + msg, spy
-        elif estado == "TRANSICION": return "WARNING", h, "VISCOSO: " + msg, spy
-        else: return "LIQUID", h, "NOMINAL: " + msg, spy
-    except: return "UNKNOWN", 0, "Desconectado", pd.DataFrame()
-
-def calculate_beta(ticker_hist, market_hist):
-    try:
-        df = pd.DataFrame({'Asset': ticker_hist['Close'].pct_change(), 'Market': market_hist['Close'].pct_change()}).dropna()
-        if df.empty: return 1.0
-        cov = df.cov().iloc[0, 1]
-        var = df['Market'].var()
-        return cov / var if var != 0 else 1.0
-    except: return 1.0
-
-# ==============================================================================
-# 2. INTELIGENCIA (IA & TAI ENGINE)
-# ==============================================================================
-
-def extract_ticker(user_input):
-    words = user_input.upper().replace('?', '').replace('.', '').split()
-    known_tickers = list(ASSET_DB.values()) + ["PLTR", "NVDA", "BTC", "ETH", "SPY"]
-    for w in words:
-        if w in known_tickers: return w
-        if 2 <= len(w) <= 6 and w.isalpha(): return w 
-    return None
-
-def generate_faros_insight(ticker):
-    try:
-        ticker = ticker.upper()
-        hist = yf.Ticker(ticker).history(period="1y")
-        if hist.empty: return f"⚠️ No encontré datos para **{ticker}**."
+        status = "LIQUID"
+        if "TURBULENTO" in estado: status = "GAS"
+        elif "TRANSICION" in estado: status = "WARNING"
         
-        re, h, psi, estado = fisica.calcular_hidrodinamica(hist)
-        curr_price = hist['Close'].iloc[-1]
-        
-        if estado == "TURBULENTO":
-            emoji = "⛔"; rec = "CASH / SALIDA"
-            desc = f"Reynolds Crítico ({re:.0f}). Riesgo de ruina activado."
-        elif estado == "TRANSICION":
-            emoji = "⚠️"; rec = "PRECAUCIÓN"
-            desc = f"Viscosidad alta (Re {re:.0f}). Mercado inestable."
-        else: 
-            if psi > 60: emoji = "🚀"; rec = "COMPRA FUERTE"; desc = "Flujo Laminar puro."
-            elif psi > 20: emoji = "✅"; rec = "ACUMULAR"; desc = "Tendencia saludable."
-            else: emoji = "🧊"; rec = "ESPERAR"; desc = "Sin inercia."
-
-        return f"""
-        ### 📡 Hidrodinámica TAI: {ticker}
-        **Precio:** ${curr_price:.2f} | **Gobernanza Ψ:** {psi:.0f}%
-        **Estado:** {emoji} **{estado}** (Re: {re:.0f})
-        > {desc}
-        **Veredicto:** {rec}
-        """
-    except Exception as e: return f"Error: {str(e)}"
-
-def calculate_tai_weights(tickers):
-    scores = {}; valid_tickers = []
-    for t in tickers:
-        try:
-            hist = yf.Ticker(t).history(period="6mo")
-            if len(hist) > 50:
-                _, _, psi, estado = fisica.calcular_hidrodinamica(hist)
-                weight_score = 0 if estado == "TURBULENTO" else psi
-                scores[t] = weight_score
-                valid_tickers.append(t)
-        except: pass
-    total = sum(scores.values())
-    w_str = ""
-    if total > 0: 
-        for t in valid_tickers: w_str += f"{t}, {scores[t]/total:.2f}\n"
-    else: w_str = "SISTEMA EN CASH (PROTECCIÓN)"
-    return w_str
+        return status, h, msg, spy
+    except: return "UNKNOWN", 0, "Offline", pd.DataFrame()
 
 # ==============================================================================
-# 3. MÓDULOS DE ANÁLISIS
+# 2. LOGICA DE NEGOCIO
 # ==============================================================================
 
-def analyze_country(country_name):
-    proxies = {"USA": "SPY", "MEXICO": "EWW", "EUROPA": "VGK", "CHINA": "MCHI", "BRASIL": "EWZ"}
-    t = proxies.get(country_name)
-    if not t: return None
-    try:
-        etf = yf.Ticker(t).history(period="1y")
-        re, h, psi, estado = fisica.calcular_hidrodinamica(etf)
-        return {"Name": country_name, "Ticker": t, "Price": etf['Close'].iloc[-1], "Status": estado, "Reynolds": re, "Score": psi}
-    except: return None
-
-def analyze_portfolio(holdings):
-    _, _, _, spy_hist = get_market_status()
-    results = []; tickers = [t for t in holdings.keys() if t != 'CASH']
-    if not tickers: return None, None, None
+def analyze_portfolio_allocation(selected_assets, manual_input):
+    tickers = [ASSET_DB[k] for k in selected_assets]
+    if manual_input:
+        tickers += [x.strip().upper() for x in manual_input.split(',')]
+    tickers = list(set(tickers))
+    
+    allocations = {}
+    valid_tickers = []
     
     for t in tickers:
-        try:
-            hist = yf.Ticker(t).history(period="1y")
-            if not hist.empty:
-                beta = calculate_beta(hist, spy_hist)
-                re, h, psi, estado = fisica.calcular_hidrodinamica(hist)
-                action = "VENDER" if estado == "TURBULENTO" else ("AUMENTAR" if psi > 60 else "MANTENER")
-                results.append({"Ticker": t, "Weight": holdings[t], "Reynolds": re, "Psi": psi, "Status": estado, "Action": action, "Beta": beta})
-        except: pass
-    
-    if not results: return None, pd.DataFrame(), {"Beta":0, "Psi":0}
-    df_res = pd.DataFrame(results)
-    port_psi = (df_res['Psi'] * df_res['Weight']).sum()
-    return df_res, None, {"Beta": df_res['Beta'].mean(), "Psi": port_psi}
-
-@st.cache_data(ttl=300)
-def get_live_data(tickers_list):
-    m_status, _, m_msg, _ = get_market_status()
-    data_list = []
-    for ticker in tickers_list:
-        try:
-            hist = yf.Ticker(ticker).history(period="6mo")
-            if len(hist) > 20:
-                re, h, psi, estado = fisica.calcular_hidrodinamica(hist)
-                signal = "VENTA" if estado == "TURBULENTO" else ("COMPRA" if psi > 60 else "NEUTRAL")
-                narrative = f"Reynolds: {re:.0f}"
-                category = "danger" if estado == "TURBULENTO" else ("success" if psi > 60 else "warning")
-                data_list.append({"Ticker": ticker, "Price": hist['Close'].iloc[-1], "Signal": signal, "Category": category, "Narrative": narrative, "Entropy": h, "Reynolds": re, "Psi": psi, "Status": estado})
-        except: pass
-    return pd.DataFrame(data_list).sort_values('Psi', ascending=False) if data_list else pd.DataFrame(), m_status, 0, m_msg
-
-# ==============================================================================
-# 4. ORÁCULO DE MONTE CARLO (Regresado de v2.0)
-# ==============================================================================
-def run_oracle_sim(ticker, days):
-    try:
-        hist = yf.Ticker(ticker).history(period="1y")
-        if len(hist) < 50: return None
-        
-        # 1. Obtener física actual
-        re, _, _, estado = fisica.calcular_hidrodinamica(hist)
-        
-        # 2. Configurar Monte Carlo
-        last_price = hist['Close'].iloc[-1]
-        daily_vol = hist['Close'].pct_change().std()
-        
-        # AJUSTE FÍSICO: Si hay turbulencia, aumentamos la volatilidad proyectada (Cisne Negro)
-        if estado == "TURBULENTO": daily_vol *= 2.0 
-        elif estado == "TRANSICION": daily_vol *= 1.5
-        
-        # Drift (Tendencia media)
-        drift = hist['Close'].pct_change().mean()
-        
-        sims = 500
-        paths = np.zeros((days, sims))
-        paths[0] = last_price
-        
-        for t in range(1, days):
-            shock = np.random.normal(0, daily_vol, sims)
-            paths[t] = paths[t-1] * np.exp(drift + shock)
+        hist = download_data(t, "6mo")
+        if not hist.empty:
+            _, _, psi, estado = fisica.calcular_hidrodinamica(hist)
+            # Regla de Asignación:
+            # Si es Laminar o Super-Laminar -> Psi completo
+            # Si es Turbulento -> 0 (Cash)
+            weight = psi if "TURBULENTO" not in estado else 0
+            allocations[t] = weight
+            valid_tickers.append(t)
             
-        return paths, re, estado
-    except: return None
+    total_score = sum(allocations.values())
+    final_weights = {}
+    
+    if total_score > 0:
+        for t in valid_tickers:
+            final_weights[t] = allocations[t] / total_score
+    else:
+        return "⚠️ SISTEMA EN MODO PROTECCIÓN (CASH 100%)", {}
+        
+    return final_weights, allocations
 
 # ==============================================================================
-# 5. FRONT-END
+# 3. INTERFAZ FRONT-END
 # ==============================================================================
 
 with st.sidebar:
-    st.title("📡 FAROS v3.1")
-    st.caption("**Calibrated Physics Engine**")
+    st.title("📡 FAROS v4.0")
+    st.caption("**Optimized Physics Engine**")
     app_mode = st.radio("SISTEMA:", ["🤖 ANALISTA IA", "🌎 MACRO FRACTAL", "💼 GESTIÓN PORTAFOLIOS", "🔍 SCANNER FÍSICO", "⏳ BACKTEST LAB", "🔮 ORÁCULO"])
+    
+    st.markdown("---")
+    m_stat, _, m_msg, _ = get_market_status()
+    color = "green" if m_stat == "LIQUID" else "red"
+    st.markdown(f"**Mercado Global (SPY):**")
+    st.markdown(f"<span style='color:{color}; font-weight:bold'>{m_msg}</span>", unsafe_allow_html=True)
 
+# --- ANALISTA IA ---
 if app_mode == "🤖 ANALISTA IA":
-    st.title("Analista Hidrodinámico")
+    st.title("Analista Hidrodinámico v4")
     if "messages" not in st.session_state: st.session_state.messages = []
+    
     for msg in st.session_state.messages: st.chat_message(msg["role"]).markdown(msg["content"])
-    if prompt := st.chat_input("Consulta activo (ej: TSLA)"):
+    
+    if prompt := st.chat_input("Consulta activo (ej: NVDA)"):
         st.session_state.messages.append({"role": "user", "content": prompt})
         st.chat_message("user").markdown(prompt)
-        t = extract_ticker(prompt)
-        res = generate_faros_insight(t) if t else "Ticker no detectado."
-        st.chat_message("assistant").markdown(res)
-        st.session_state.messages.append({"role": "assistant", "content": res})
+        
+        with st.chat_message("assistant"):
+            with st.spinner("Procesando física..."):
+                t = prompt.upper().split()[0] # Simple extraction
+                hist = download_data(t, "1y")
+                if not hist.empty:
+                    re, h, psi, estado = fisica.calcular_hidrodinamica(hist)
+                    price = hist['Close'].iloc[-1]
+                    
+                    color_st = "green" if psi > 50 else "red"
+                    res = f"""
+                    ### 🔬 Diagnóstico: {t}
+                    **Precio:** ${price:.2f} | **Gobernanza:** {psi:.0f}%
+                    
+                    **Estado Físico:** <span style='color:{color_st}'>**{estado}**</span>
+                    * **Reynolds:** {re:.0f} (Fricción: {h:.2f} bits)
+                    
+                    **Recomendación:** {"COMPRAR/MANTENER" if psi > 50 else "VENDER/CASH"}
+                    """
+                    st.markdown(res, unsafe_allow_html=True)
+                    st.session_state.messages.append({"role": "assistant", "content": res})
+                else:
+                    st.error("No encontré datos. Intenta con el Ticker exacto.")
 
+# --- MACRO ---
 elif app_mode == "🌎 MACRO FRACTAL":
     st.title("Sandbox Soberano")
-    c = st.selectbox("País", ["USA", "EUROPA", "CHINA", "BRASIL", "MEXICO"])
-    if st.button("Simular"):
-        d = analyze_country(c)
-        if d:
-            fig = go.Figure(go.Indicator(mode="gauge+number", value=d['Reynolds'], title={'text': f"Turbulencia ({d['Name']})"}, gauge={'axis': {'range': [None, 6000]}, 'steps': [{'range': [0, 2300], 'color': "lightgreen"}, {'range': [2300, 4000], 'color': "yellow"}, {'range': [4000, 6000], 'color': "red"}]}))
-            st.plotly_chart(fig)
-            st.metric("Gobernanza (Ψ)", f"{d['Score']:.0f}/100")
-
-elif app_mode == "💼 GESTIÓN PORTAFOLIOS":
-    st.title("Gobernanza de Capital")
-    assets = st.text_area("Cartera (Ticker, Peso):", "PLTR, 0.4\nNVDA, 0.4\nCASH, 0.2")
-    if st.button("Analizar"):
-        h = {l.split(',')[0].strip(): float(l.split(',')[1]) for l in assets.split('\n') if ',' in l}
-        df, _, m = analyze_portfolio(h)
-        if df is not None:
-            c1, c2 = st.columns(2)
-            c1.metric("Ψ Global", f"{m['Psi']:.0f}%"); c2.metric("Beta", f"{m['Beta']:.2f}")
-            st.dataframe(df)
-
-elif app_mode == "🔍 SCANNER FÍSICO":
-    st.title("Scanner Calibrado")
-    sel = st.multiselect("Activos", list(ASSET_DB.keys()), default=["BTC-USD", "NVDA", "SPY"])
-    if st.button("Escanear"):
-        t = get_tickers_from_selection(sel, "")
-        df, m_s, _, m_msg = get_live_data(t)
-        st.info(f"Contexto Global: {m_msg}")
-        if not df.empty:
-            fig = px.scatter(df, x="Reynolds", y="Psi", color="Status", text="Ticker", color_discrete_map={"TURBULENTO":"red", "LAMINAR":"green", "TRANSICION":"orange"})
-            fig.add_vline(x=4000, line_dash="dash", line_color="red")
-            st.plotly_chart(fig)
-            st.dataframe(df)
-
-elif app_mode == "⏳ BACKTEST LAB":
-    st.title("Validación Histórica (Calibrada)")
-    tck = st.text_input("Activo:", "BTC-USD").upper()
+    c_map = {"USA": "SPY", "EUROPA": "VGK", "CHINA": "MCHI", "BRASIL": "EWZ", "MEXICO": "EWW"}
+    sel = st.selectbox("Jurisdicción", list(c_map.keys()))
     
     if st.button("Simular"):
-        try:
-            df = yf.Ticker(tck).history(period="2y")
-            # --- CALCULO MANUAL DE FÍSICA PARA BACKTEST ---
-            # Usamos la misma lógica que PhysicsEngine pero vectorizada para velocidad
+        t = c_map[sel]
+        df = download_data(t, "1y")
+        if not df.empty:
+            re, h, psi, estado = fisica.calcular_hidrodinamica(df)
+            
+            c1, c2 = st.columns([1,2])
+            with c1:
+                st.metric("Score Macro (Ψ)", f"{psi:.0f}/100")
+                st.metric("Reynolds", f"{re:.0f}")
+            with c2:
+                fig = go.Figure(go.Indicator(
+                    mode = "gauge+number", value = re,
+                    title = {'text': f"Turbulencia ({sel})"},
+                    gauge = {'axis': {'range': [None, 6000]}, 
+                             'steps': [{'range': [0, 2500], 'color': "lightgreen"},
+                                       {'range': [2500, 5000], 'color': "yellow"},
+                                       {'range': [5000, 6000], 'color': "red"}]}
+                ))
+                st.plotly_chart(fig, use_container_width=True)
+
+# --- PORTAFOLIO ---
+elif app_mode == "💼 GESTIÓN PORTAFOLIOS":
+    st.title("Gestión de Activos (Ψ)")
+    
+    # 1. SELECCIÓN DE ACTIVOS (Restaurada)
+    with st.expander("📝 Configuración de Cartera", expanded=True):
+        col1, col2 = st.columns(2)
+        # Fix: Claves por defecto deben existir en ASSET_DB
+        defaults = ["PALANTIR (PLTR)", "NVIDIA (NVDA)", "BITCOIN (BTC-USD)"] 
+        sel = col1.multiselect("Activos:", list(ASSET_DB.keys()), default=defaults)
+        manual = col2.text_input("Manual (Separado por comas):", "COIN")
+        
+        if st.button("⚖️ Auto-Balanceo Físico"):
+            weights, raw_scores = analyze_portfolio_allocation(sel, manual)
+            st.session_state['alloc'] = weights
+            st.session_state['scores'] = raw_scores
+
+    # 2. RESULTADOS
+    if 'alloc' in st.session_state:
+        alloc = st.session_state['alloc']
+        raw = st.session_state['scores']
+        
+        if isinstance(alloc, str):
+            st.error(alloc) # Mensaje de Cash
+        else:
+            st.subheader("Distribución Óptima Sugerida")
+            df_w = pd.DataFrame(list(alloc.items()), columns=['Ticker', 'Peso Ideal'])
+            df_w['Peso Ideal'] = df_w['Peso Ideal'].apply(lambda x: f"{x*100:.1f}%")
+            df_w['Score Físico'] = df_w['Ticker'].map(raw).map("{:.0f}".format)
+            
+            c1, c2 = st.columns([1, 2])
+            with c1: st.dataframe(df_w, hide_index=True)
+            with c2: 
+                fig = px.pie(names=alloc.keys(), values=alloc.values(), title="Asignación de Capital")
+                st.plotly_chart(fig, use_container_width=True)
+
+# --- SCANNER ---
+elif app_mode == "🔍 SCANNER FÍSICO":
+    st.title("Scanner de Navier-Stokes")
+    # Fix: Default values must match keys
+    defaults = ["NVIDIA (NVDA)", "TESLA (TSLA)", "BITCOIN (BTC-USD)"]
+    sel = st.multiselect("Universo:", list(ASSET_DB.keys()), default=defaults)
+    
+    if st.button("Escanear"):
+        tickers = [ASSET_DB[k] for k in sel]
+        data = []
+        progress = st.progress(0)
+        
+        for i, t in enumerate(tickers):
+            df = download_data(t, "6mo")
+            if not df.empty:
+                re, h, psi, estado = fisica.calcular_hidrodinamica(df)
+                data.append({
+                    "Ticker": t, "Price": df['Close'].iloc[-1],
+                    "Reynolds": re, "Psi": psi, "Status": estado,
+                    "Entropy": h
+                })
+            progress.progress((i+1)/len(tickers))
+            
+        df_res = pd.DataFrame(data).sort_values("Psi", ascending=False)
+        st.dataframe(df_res.style.apply(lambda x: ['background-color: #ffcccc' if "TURBULENTO" in v else 'background-color: #c8e6c9' for v in x], subset=['Status']))
+        
+        # Grafico
+        if not df_res.empty:
+            fig = px.scatter(df_res, x="Reynolds", y="Psi", color="Status", text="Ticker", title="Mapa de Fases")
+            st.plotly_chart(fig)
+
+# --- BACKTEST ---
+elif app_mode == "⏳ BACKTEST LAB":
+    st.title("Validación Histórica (v4)")
+    tck = st.text_input("Activo:", "NVDA").upper()
+    
+    if st.button("Ejecutar Simulación"):
+        df = download_data(tck, "2y")
+        if not df.empty:
+            # Lógica Vectorizada (Aproximación v4)
             df['Ret'] = df['Close'].pct_change()
-            df['V'] = df['Ret'].abs().rolling(3).mean() # Velocidad
-            df['Rho'] = df['Volume'] / df['Volume'].rolling(14).mean() # Densidad
-            df['Mu'] = ((df['High']-df['Low'])/df['Close']).rolling(3).mean() # Viscosidad
-            df['L'] = df['Close'].rolling(14).std() / df['Close'] # Longitud Normalizada
             
-            # Constante calibrada K
-            K = 250000 
-            df['Re'] = (df['Rho'] * df['V'] * df['L'] / (df['Mu'] + 0.0001)) * K
+            # Variables Físicas
+            df['Spread'] = (df['High']-df['Low'])/df['Close']
+            df['Viscosity'] = df['Spread'].rolling(3).mean()
+            df['Velocity'] = df['Ret'].abs().rolling(3).mean()
+            df['Density'] = df['Volume'] / df['Volume'].rolling(14).mean()
+            df['L'] = df['Close'].rolling(14).std() / df['Close']
             
-            # Señales
-            df['Signal'] = np.where(df['Re'] < 2300, 1, 0) # Entrar en Laminar
-            df['Signal'] = np.where(df['Re'] > 4000, 0, df['Signal']) # Salir en Turbulento
-            df['Signal'] = df['Signal'].shift(1) # Evitar Lookahead bias
+            K = 150000
+            df['Re'] = (df['Density'] * df['Velocity'] * df['L'] / (df['Viscosity'] + 0.0001)) * K
+            
+            # Tendencia
+            df['Trend'] = (df['Close'] - df['Close'].shift(14)) / df['Close'].shift(14)
+            
+            # LÓGICA DE SEÑAL MEJORADA (SUPER-LAMINAR)
+            # 1. Comprar si es Laminar (<2500)
+            # 2. MANTENER si es Turbulento PERO la tendencia es fuerte (>10%) -> Super Laminar
+            # 3. VENDER si es Turbulento Y la tendencia es débil o negativa
+            
+            cond_buy = (df['Re'] < 2500)
+            cond_hold = (df['Re'] > 2500) & (df['Trend'] > 0.10) # Regla de Oro v4
+            
+            df['Signal'] = np.where(cond_buy | cond_hold, 1, 0)
+            df['Signal'] = df['Signal'].shift(1) # Delay 1 dia
             
             df['Strat'] = df['Ret'] * df['Signal']
             df['Cum_Strat'] = (1 + df['Strat']).cumprod()
             df['Cum_BH'] = (1 + df['Ret']).cumprod()
             
-            st.line_chart(df[['Cum_Strat', 'Cum_BH']])
-            st.metric("Retorno FAROS", f"{(df['Cum_Strat'].iloc[-1]-1)*100:.1f}%")
-        except Exception as e: st.error(str(e))
+            ret_bh = (df['Cum_BH'].iloc[-1]-1)*100
+            ret_st = (df['Cum_Strat'].iloc[-1]-1)*100
+            
+            c1, c2 = st.columns(2)
+            c1.metric("Buy & Hold", f"{ret_bh:.1f}%")
+            c2.metric("FAROS v4", f"{ret_st:.1f}%", delta=f"{ret_st-ret_bh:.1f}%")
+            
+            st.line_chart(df[['Cum_BH', 'Cum_Strat']])
+            
+            with st.expander("Ver Datos"):
+                st.dataframe(df[['Close', 'Re', 'Trend', 'Signal']].tail(20))
 
+# --- ORACULO ---
 elif app_mode == "🔮 ORÁCULO":
-    st.title("Proyección Monte Carlo (Física)")
-    o_t = st.text_input("Activo", "NVDA").upper()
-    d = st.slider("Días", 30, 365, 90)
+    st.title("Proyección Monte Carlo")
+    t = st.text_input("Activo:", "BTC-USD").upper()
+    days = st.slider("Días a proyectar:", 30, 365, 90)
     
-    if st.button("Proyectar"):
-        res = run_oracle_sim(o_t, d)
-        if res:
-            paths, re, est = res
+    if st.button("Consultar Oráculo"):
+        hist = download_data(t, "1y")
+        if not hist.empty:
+            re, _, _, estado = fisica.calcular_hidrodinamica(hist)
+            last_price = hist['Close'].iloc[-1]
+            
+            # Volatilidad base
+            daily_vol = hist['Close'].pct_change().std()
+            # Ajuste por Turbulencia Actual
+            if "TURBULENTO" in estado: daily_vol *= 1.5
+            
+            # Simulación
+            sims = 1000
+            paths = np.zeros((days, sims))
+            paths[0] = last_price
+            drift = hist['Close'].pct_change().mean()
+            
+            for d in range(1, days):
+                shock = np.random.normal(0, daily_vol, sims)
+                paths[d] = paths[d-1] * np.exp(drift + shock)
+            
+            # Bandas
+            p90 = np.percentile(paths, 90, axis=1)
+            p50 = np.percentile(paths, 50, axis=1)
+            p10 = np.percentile(paths, 10, axis=1)
+            
             fig = go.Figure()
-            # Muestra 50 caminos aleatorios
-            for i in range(min(50, paths.shape[1])): 
-                fig.add_trace(go.Scatter(y=paths[:, i], line=dict(color='gray', width=0.5), opacity=0.2, showlegend=False))
-            
-            # Media y Percentiles
-            median = np.median(paths, axis=1)
-            p95 = np.percentile(paths, 95, axis=1)
-            p05 = np.percentile(paths, 5, axis=1)
-            
-            fig.add_trace(go.Scatter(y=median, line=dict(color='blue', width=2), name='Tendencia Central'))
-            fig.add_trace(go.Scatter(y=p95, line=dict(color='green', dash='dash'), name='Optimista'))
-            fig.add_trace(go.Scatter(y=p05, line=dict(color='red', dash='dash'), name='Piso Riesgo'))
+            fig.add_trace(go.Scatter(y=p90, name="Techo (Optimista)", line=dict(color='green', dash='dash')))
+            fig.add_trace(go.Scatter(y=p50, name="Tendencia Central", line=dict(color='blue')))
+            fig.add_trace(go.Scatter(y=p10, name="Suelo (Riesgo)", line=dict(color='red', dash='dash')))
             
             st.plotly_chart(fig)
-            st.metric("Estado Inicial", est, f"Re: {re:.0f}")
-            if est == "TURBULENTO": st.error("⚠️ ALERTA: La proyección incluye volatilidad expandida por turbulencia actual.")
+            st.info(f"Estado Inicial: {estado} (Re: {re:.0f}). Volatilidad ajustada por física.")
