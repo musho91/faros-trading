@@ -3,5 +3,4 @@ pandas
 numpy
 yfinance
 plotly
-seaborn
-matplotlib
+scipy
