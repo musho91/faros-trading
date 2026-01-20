@@ -4,77 +4,80 @@ from scipy.stats import entropy
 
 class FarosPhysics:
     def __init__(self):
-        self.RE_CRITICO = 2300
-        self.RE_TURBULENTO = 4000
-        # Constante de calibración para escalar los ratios a valores de Reynolds (0-6000)
-        self.K_UNIVERSAL = 250000 
+        # Umbrales ajustados para ser menos miedosos
+        self.RE_CRITICO = 2500
+        self.RE_TURBULENTO = 5000
+        # Bajamos la K para que no salga siempre 10,000
+        self.K_UNIVERSAL = 150000 
 
     def calcular_hidrodinamica(self, hist, window=14):
         """
-        Calcula las variables de Navier-Stokes Normalizadas.
+        Calcula Navier-Stokes Financiero (Calibrado v4.0)
         """
         if len(hist) < window:
             return 0, 0, 0, "DATA_INSUFICIENTE"
 
-        # --- 1. VISCOSIDAD (mu): Fricción del mercado ---
-        # Rango relativo (High-Low)/Close. 
-        # Si es bajo, el mercado es eficiente (baja fricción). Si es alto, hay resistencia.
-        # Añadimos un suavizado (rolling mean) para evitar ruido de 1 vela.
-        spread_proxy = (hist['High'] - hist['Low']) / hist['Close']
-        viscosity = spread_proxy.rolling(3).mean().iloc[-1]
+        # --- 1. VISCOSIDAD (mu) ---
+        # Spread relativo suavizado.
+        spread = (hist['High'] - hist['Low']) / hist['Close']
+        viscosity = spread.rolling(3).mean().iloc[-1]
         
-        # --- 2. DENSIDAD (rho): Profundidad relativa ---
-        # Volumen actual vs Media. >1.0 significa mercado denso (difícil de mover).
+        # --- 2. DENSIDAD (rho) ---
+        # Volumen relativo.
         vol_sma = hist['Volume'].rolling(window).mean().iloc[-1]
-        if vol_sma == 0: vol_sma = 1
-        density = hist['Volume'].iloc[-1] / vol_sma
+        density = (hist['Volume'].iloc[-1] / vol_sma) if vol_sma > 0 else 1.0
 
-        # --- 3. VELOCIDAD (v): Inercia del precio ---
-        # Valor absoluto del cambio porcentual.
+        # --- 3. VELOCIDAD (v) ---
+        # Momentum absoluto.
         velocity = hist['Close'].pct_change().abs().rolling(3).mean().iloc[-1]
 
-        # --- 4. LONGITUD (L): Estructura del movimiento ---
-        # Usamos la Volatilidad Relativa (StdDev / Precio) para que sea agnóstico al precio del activo.
-        # Esto soluciona el error de que NVDA salga siempre turbulento.
+        # --- 4. LONGITUD (L) ---
+        # Volatilidad relativa (ATR % aprox).
         L = (hist['Close'].rolling(window).std() / hist['Close']).iloc[-1]
 
-        # --- CÁLCULO DE REYNOLDS (Re_f) ---
-        # Fórmula: Re = (rho * v * L) / mu
-        # Multiplicamos por K_UNIVERSAL para llevarlo a la escala 0 - 6000
-        # Evitamos división por cero en viscosidad
+        # --- REYNOLDS (Re_f) ---
         denom = viscosity + 0.0001
         re_raw = (density * velocity * L) / denom
         reynolds = re_raw * self.K_UNIVERSAL
         
-        # Cap de seguridad visual (para que no rompa la gráfica)
-        reynolds = min(reynolds, 10000)
+        # Cap visual pero no lógico
+        reynolds_visual = min(reynolds, 10000)
 
-        # --- CÁLCULO DE ENTROPÍA (H) ---
+        # --- ENTROPÍA (H) ---
         returns = hist['Close'].pct_change().tail(window).dropna()
-        # Discretizamos los retornos en bins para calcular entropía
         hist_counts, _ = np.histogram(returns, bins='auto')
         entropy_val = entropy(hist_counts, base=2)
         if np.isnan(entropy_val): entropy_val = 0
         
-        # --- GOBERNANZA (Psi) ---
+        # --- ESTADO Y EXCEPCIÓN "SUPER-LAMINAR" ---
+        # Calculamos la tendencia pura
+        trend = (hist['Close'].iloc[-1] - hist['Close'].iloc[-window]) / hist['Close'].iloc[-window]
+        
         if reynolds < self.RE_CRITICO:
             estado = "LAMINAR"
             factor_re = 1.0
         elif reynolds < self.RE_TURBULENTO:
-            estado = "TRANSICION"
-            factor_re = 0.5
+            # Si hay turbulencia pero la tendencia es MUY fuerte (>10%), es "Super-Laminar" (Cohete)
+            if trend > 0.10: 
+                estado = "SUPER-LAMINAR"
+                factor_re = 0.9 # Penalización leve
+            else:
+                estado = "TRANSICION"
+                factor_re = 0.5
         else:
-            estado = "TURBULENTO"
-            factor_re = 0.0 # Veto del Crítico
+            # Si es turbulento extremo
+            if trend > 0.15: # Salvar activos hiper-growth (ej. NVDA en rally)
+                estado = "SUPER-LAMINAR (RIESGO)"
+                factor_re = 0.4
+            else:
+                estado = "TURBULENTO"
+                factor_re = 0.0 # Veto
 
-        # Psi depende de la tendencia y la entropía, filtrado por Reynolds
-        # Tendencia de corto plazo
-        trend = (hist['Close'].iloc[-1] - hist['Close'].iloc[-window]) / hist['Close'].iloc[-window]
+        # --- GOBERNANZA (Psi) ---
+        # Psi base: Fuerza de tendencia * Calidad de Información
+        trend_score = max(0, trend * 15) # Amplificamos señal de tendencia
         
-        # Normalizamos la tendencia (0.10 de subida = 100 puntos base)
-        trend_score = max(0, trend * 10) 
+        # Ecuación: Psi = tanh(Tendencia * Entropía) * FactorReynolds
+        psi = np.tanh(trend_score * (entropy_val if entropy_val > 0.5 else 0.5)) * factor_re * 100
         
-        # Ecuación Psi
-        psi = np.tanh(trend_score * (entropy_val / 2)) * factor_re * 100
-        
-        return reynolds, entropy_val, psi, estado
+        return reynolds_visual, entropy_val, psi, estado
