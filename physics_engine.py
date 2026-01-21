@@ -5,83 +5,88 @@ from scipy.stats import entropy
 
 class FarosPhysics:
     def __init__(self):
-        self.RE_CRITICO = 2500
-        self.RE_TURBULENTO = 5000
         self.K_UNIVERSAL = 150000 
 
-    def calcular_hidrodinamica(self, hist, window=14):
-        # 1. Validación de Datos Mínimos
-        if hist is None or len(hist) < window:
+    def calcular_hidrodinamica(self, hist, perfil_riesgo="Growth", window=14):
+        if hist is None or len(hist) < 50:
             return 0, 0, 0, "DATA_INSUFICIENTE"
 
         try:
-            # --- 1. VISCOSIDAD (mu) ---
-            # Spread relativo. Rellenamos ceros para evitar errores.
+            # --- 0. AJUSTE POR PERFIL DE RIESGO ---
+            # Definimos qué tanta turbulencia aguantamos antes de salir
+            if perfil_riesgo == "Conservador":
+                limite_turbulencia = 3000
+                sensibilidad_psi = 0.8
+            elif perfil_riesgo == "Quantum": # Muy agresivo
+                limite_turbulencia = 6000
+                sensibilidad_psi = 1.5
+            else: # Growth (Default)
+                limite_turbulencia = 4500
+                sensibilidad_psi = 1.0
+
+            # --- 1. VARIABLES FÍSICAS ---
+            # Spread relativo (Viscosidad)
             spread = (hist['High'] - hist['Low']) / hist['Close']
             viscosity = spread.rolling(3).mean().iloc[-1]
             if np.isnan(viscosity) or viscosity == 0: viscosity = 0.001
             
-            # --- 2. DENSIDAD (rho) ---
+            # Densidad
             vol_sma = hist['Volume'].rolling(window).mean().iloc[-1]
-            current_vol = hist['Volume'].iloc[-1]
-            # Si vol_sma es 0 o NaN, asumimos densidad neutra (1.0)
-            density = (current_vol / vol_sma) if (vol_sma > 0 and not np.isnan(vol_sma)) else 1.0
+            density = (hist['Volume'].iloc[-1] / vol_sma) if vol_sma > 0 else 1.0
 
-            # --- 3. VELOCIDAD (v) ---
+            # Velocidad y Longitud
             velocity = hist['Close'].pct_change().abs().rolling(3).mean().iloc[-1]
-            if np.isnan(velocity): velocity = 0
-
-            # --- 4. LONGITUD (L) ---
             L = (hist['Close'].rolling(window).std() / hist['Close']).iloc[-1]
-            if np.isnan(L): L = 0.01
 
-            # --- CÁLCULO DE REYNOLDS ---
+            # REYNOLDS
             re_raw = (density * velocity * L) / viscosity
-            reynolds = re_raw * self.K_UNIVERSAL
-            
-            # Limpieza de infinitos
-            if np.isinf(reynolds) or np.isnan(reynolds): reynolds = 10000
-            reynolds = min(reynolds, 10000)
+            reynolds = min(re_raw * self.K_UNIVERSAL, 10000)
 
-            # --- ENTROPÍA ---
+            # --- 2. ESTADOS DE LA MATERIA (Mapeo) ---
+            # Tendencia de largo plazo (SMA 50) para definir dirección
+            sma_50 = hist['Close'].rolling(50).mean().iloc[-1]
+            trend_force = (hist['Close'].iloc[-1] - sma_50) / sma_50
+            
+            # Entropía
             returns = hist['Close'].pct_change().tail(window).dropna()
-            if len(returns) > 1:
-                hist_counts, _ = np.histogram(returns, bins='auto')
-                entropy_val = entropy(hist_counts, base=2)
-            else:
-                entropy_val = 0
-            
+            hist_counts, _ = np.histogram(returns, bins='auto')
+            entropy_val = entropy(hist_counts, base=2)
             if np.isnan(entropy_val): entropy_val = 0
-            
-            # --- ESTADO Y GOBERNANZA ---
-            trend = (hist['Close'].iloc[-1] - hist['Close'].iloc[-window]) / hist['Close'].iloc[-window]
-            if np.isnan(trend): trend = 0
 
-            if reynolds < self.RE_CRITICO:
-                estado = "LAMINAR"
-                factor_re = 1.0
-            elif reynolds < self.RE_TURBULENTO:
-                # Lógica Super-Laminar: Si sube fuerte, ignoramos fricción
-                if trend > 0.10: 
-                    estado = "SUPER-LAMINAR"
-                    factor_re = 0.9
+            # LÓGICA DE ESTADOS v5.0
+            if reynolds > limite_turbulencia:
+                # Si hay mucha turbulencia, es GAS o PLASMA
+                if trend_force > 0.15 and perfil_riesgo != "Conservador":
+                    estado = "PLASMA" # Alta energía, subida vertical (Riesgoso pero rentable)
+                    factor_psi = 0.6  # Invertir con cuidado
                 else:
-                    estado = "TRANSICION"
-                    factor_re = 0.5
+                    estado = "GASEOSO" # Caos total
+                    factor_psi = 0.0  # Salir
             else:
-                if trend > 0.15: 
-                    estado = "SUPER-LAMINAR (RIESGO)"
-                    factor_re = 0.4
+                # Si el flujo es calmado
+                if trend_force > 0.02:
+                    estado = "LÍQUIDO" # Flujo Laminar Alcista
+                    factor_psi = 1.0
+                elif trend_force < -0.05:
+                    estado = "SÓLIDO (BAJISTA)" # Caída ordenada
+                    factor_psi = 0.0
                 else:
-                    estado = "TURBULENTO"
-                    factor_re = 0.0 
+                    estado = "SÓLIDO (RANGO)" # Estancado
+                    factor_psi = 0.2
 
-            # Psi amplificado para reaccionar más rápido
-            trend_score = max(0, trend * 20) 
-            psi = np.tanh(trend_score * (entropy_val if entropy_val > 0.1 else 1.0)) * factor_re * 100
+            # --- 3. CÁLCULO DE GOBERNANZA (PSI) ---
+            # Psi ahora mira la tendencia de fondo (SMA 50) no solo la de ayer.
+            # Normalizamos: Una tendencia del 10% (0.10) debería dar un score alto.
+            score_base = max(0, trend_force * 10) 
             
+            # Ecuación Maestra v5:
+            # Psi = tanh(Tendencia * Calidad) * Factor_Estado * Perfil
+            psi = np.tanh(score_base * (entropy_val if entropy_val > 0.1 else 1)) * factor_psi * sensibilidad_psi * 100
+            
+            # Cap final entre 0 y 100
+            psi = max(0, min(100, psi))
+
             return reynolds, entropy_val, psi, estado
 
-        except Exception as e:
-            # En caso de error matemático, retornamos estado seguro
-            return 0, 0, 0, "ERROR_CALCULO"
+        except:
+            return 0, 0, 0, "ERROR"
