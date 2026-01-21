@@ -1,7 +1,7 @@
 # ==============================================================================
-# FAROS v5.0 - THE MATTER STATE EDITION
+# FAROS v6.0 - DEEP FLOW EDITION
 # Autor: Juan Arroyo | SG Consulting Group
-# Características: Estados de la Materia, Perfiles de Riesgo, Oráculo Preciso
+# Mejoras: Flexibilidad Temporal, Macro Fix, Oráculo Extendido
 # ==============================================================================
 
 import streamlit as st
@@ -13,332 +13,300 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from physics_engine import FarosPhysics 
 
-# Instancia Física
 fisica = FarosPhysics()
 
-# --- CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="FAROS v5.0", page_icon="📡", layout="wide")
+st.set_page_config(page_title="FAROS v6.0", page_icon="📡", layout="wide")
 st.markdown("""
 <style>
     .stApp { background-color: #FFFFFF; color: #111; }
     h1, h2, h3 { color: #0E1117 !important; } 
     .metric-card { background-color: #f8f9fa; border: 1px solid #ddd; padding: 15px; border-radius: 10px; text-align: center; }
-    .info-text { font-size: 0.85rem; color: #555; background-color: #eef; padding: 10px; border-radius: 5px; margin-top: 10px;}
 </style>
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 0. BASE DE DATOS Y UTILIDADES
+# 0. DATOS
 # ==============================================================================
 ASSET_DB = {
-    "PALANTIR (PLTR)": "PLTR", "NVIDIA (NVDA)": "NVDA", "D-WAVE (QBTS)": "QBTS", 
-    "TESLA (TSLA)": "TSLA", "APPLE (AAPL)": "AAPL", "MICROSOFT (MSFT)": "MSFT", 
-    "AMAZON (AMZN)": "AMZN", "GOOGLE (GOOGL)": "GOOGL", "META (META)": "META",
-    "BITCOIN (BTC-USD)": "BTC-USD", "ETHEREUM (ETH-USD)": "ETH-USD", 
+    "NVIDIA (NVDA)": "NVDA", "PALANTIR (PLTR)": "PLTR", "TESLA (TSLA)": "TSLA",
+    "BITCOIN (BTC-USD)": "BTC-USD", "ETHEREUM (ETH-USD)": "ETH-USD",
+    "APPLE (AAPL)": "AAPL", "MICROSOFT (MSFT)": "MSFT", "AMAZON (AMZN)": "AMZN",
+    "GOOGLE (GOOGL)": "GOOGL", "META (META)": "META",
     "S&P 500 (SPY)": "SPY", "NASDAQ 100 (QQQ)": "QQQ", "RUSSELL 2000 (IWM)": "IWM",
     "COINBASE (COIN)": "COIN", "MICROSTRATEGY (MSTR)": "MSTR",
-    "NETFLIX (NFLX)": "NFLX", "DISNEY (DIS)": "DIS", "VISA (V)": "V"
+    "D-WAVE (QBTS)": "QBTS", "IONQ (IONQ)": "IONQ", "C3.AI (AI)": "AI"
 }
 
-def get_tickers_from_selection(selection, manual_input):
-    selected = []
-    for k in selection:
-        if k in ASSET_DB: selected.append(ASSET_DB[k])
-    if manual_input:
-        manual_list = [x.strip().upper() for x in manual_input.split(',')]
-        selected.extend(manual_list)
-    return list(set(selected))
+def get_tickers(sel, manual):
+    t = [ASSET_DB[k] for k in sel if k in ASSET_DB]
+    if manual: t += [x.strip().upper() for x in manual.split(',')]
+    return list(set(t))
 
-# ==============================================================================
-# 1. GESTOR DE DATOS
-# ==============================================================================
 @st.cache_data(ttl=900)
-def download_data(ticker, period="1y"):
+def download_data(ticker, period="2y", interval="1d"):
     try:
-        df = yf.Ticker(ticker).history(period=period).copy()
-        if df.empty: return pd.DataFrame()
+        df = yf.Ticker(ticker).history(period=period, interval=interval).copy()
         return df
     except: return pd.DataFrame()
 
+# ==============================================================================
+# 1. CORE LOGIC
+# ==============================================================================
 @st.cache_data(ttl=600)
-def get_market_status(perfil):
-    try:
-        spy = download_data("SPY", "6mo")
-        if spy.empty: return "UNKNOWN", 0, "Error", pd.DataFrame()
-        re, h, psi, estado = fisica.calcular_hidrodinamica(spy, perfil)
-        msg = f"{estado} (Re: {re:.0f})"
-        color = "green" if "LÍQUIDO" in estado else ("red" if "GASEOSO" in estado else "orange")
-        return color, msg, spy
-    except: return "gray", "Offline", pd.DataFrame()
+def get_market_status(risk_p):
+    spy = download_data("SPY", "1y") # Miramos 1 año para contexto real
+    if spy.empty: return "UNKNOWN", "Offline"
+    re, _, psi, est = fisica.calcular_hidrodinamica(spy, risk_p, "Mediano")
+    return est, f"{est} (Re: {re:.0f})"
 
 # ==============================================================================
-# 2. INTERFAZ Y MÓDULOS
+# 2. INTERFAZ
 # ==============================================================================
-
 with st.sidebar:
-    st.title("📡 FAROS v5.0")
-    st.caption("**Matter State Edition**")
+    st.title("📡 FAROS v6.0")
+    st.caption("**Deep Flow Engine**")
     
-    # --- PERFIL DE RIESGO ---
-    st.markdown("### 🎚️ Configuración del Crítico")
+    st.markdown("### 🎚️ Calibración")
     risk_profile = st.select_slider("Perfil de Riesgo", options=["Conservador", "Growth", "Quantum"], value="Growth")
+    time_horizon = st.selectbox("Perspectiva Temporal", ["Corto (Trading)", "Mediano (Swing)", "Largo (Inversión)"], index=1)
     
-    st.info(f"""
-    **Modo: {risk_profile}**
-    * Ajusta la tolerancia a la turbulencia.
-    * 'Conservador' huye rápido del GAS.
-    * 'Quantum' tolera PLASMA (Alta volatilidad).
-    """)
-    
-    st.markdown("---")
-    app_mode = st.radio("SISTEMA:", ["🤖 ANALISTA IA", "🌎 MACRO FRACTAL", "💼 GESTIÓN PORTAFOLIOS", "🔍 SCANNER FÍSICO", "⏳ BACKTEST LAB", "🔮 ORÁCULO"])
-    
-    # Estatus Global
-    col_spy, msg_spy, _ = get_market_status(risk_profile)
-    st.markdown("---")
-    st.markdown(f"**Mercado Global (SPY):**")
-    st.markdown(f"<div style='color:{col_spy}; font-weight:bold; border:1px solid {col_spy}; padding:5px; text-align:center; border-radius:5px;'>{msg_spy}</div>", unsafe_allow_html=True)
+    # Mapeo de horizonte texto a param
+    h_map = {"Corto (Trading)":"Corto", "Mediano (Swing)":"Mediano", "Largo (Inversión)":"Largo"}
+    h_param = h_map[time_horizon]
 
-# --- MÓDULO 1: ANALISTA IA ---
+    st.markdown("---")
+    app_mode = st.radio("MÓDULOS:", ["🤖 ANALISTA IA", "🌎 MACRO FRACTAL", "💼 PORTAFOLIO", "🔍 SCANNER", "⏳ BACKTEST FLEX", "🔮 ORÁCULO"])
+    
+    st.markdown("---")
+    # Status Global
+    est, msg = get_market_status(risk_profile)
+    c_stat = "green" if "LÍQUIDO" in est or "PLASMA" in est else "red"
+    st.markdown(f"**Mercado (SPY):** <span style='color:{c_stat}'>**{msg}**</span>", unsafe_allow_html=True)
+
+# --- ANALISTA ---
 if app_mode == "🤖 ANALISTA IA":
-    st.title("Analista de Estados de la Materia")
-    if "messages" not in st.session_state: st.session_state.messages = []
+    st.title("Analista de Flujo Profundo")
+    if "chat" not in st.session_state: st.session_state.chat = []
     
-    for msg in st.session_state.messages: st.chat_message(msg["role"]).markdown(msg["content"])
+    for m in st.session_state.chat: st.chat_message(m["role"]).markdown(m["content"])
     
-    if prompt := st.chat_input("Consulta activo (ej: NVDA)"):
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        st.chat_message("user").markdown(prompt)
+    if p := st.chat_input("Analizar activo (ej: MSTR)..."):
+        st.session_state.chat.append({"role":"user", "content":p})
+        st.chat_message("user").markdown(p)
         
         with st.chat_message("assistant"):
-            with st.spinner("Analizando Termodinámica..."):
-                t = prompt.upper().replace("$","").split()[0]
-                hist = download_data(t, "1y")
+            with st.spinner(f"Analizando física a {time_horizon}..."):
+                t = p.upper().split()[0].replace("$","")
+                # Descargamos más data para tener contexto
+                df = download_data(t, "2y" if h_param=="Largo" else "1y")
                 
-                if not hist.empty:
-                    re, h, psi, estado = fisica.calcular_hidrodinamica(hist, risk_profile)
-                    price = hist['Close'].iloc[-1]
+                if not df.empty:
+                    re, _, psi, est = fisica.calcular_hidrodinamica(df, risk_profile, h_param)
+                    last = df['Close'].iloc[-1]
                     
-                    # Definición de colores
-                    c_map = {"LÍQUIDO": "green", "PLASMA": "purple", "SÓLIDO": "gray", "GASEOSO": "red"}
-                    c_estado = c_map.get(estado.split()[0], "black")
-                    
+                    # Interpretación Flexible
+                    if "PLASMA" in est: 
+                        rec = "🚀 MANTENER/COMPRAR (High Growth)"
+                        why = "Alta turbulencia pero tendencia dominante."
+                    elif "LÍQUIDO" in est:
+                        rec = "✅ COMPRAR/ACUMULAR"
+                        why = "Flujo limpio y estable."
+                    elif "SÓLIDO" in est:
+                        rec = "🧊 ESPERAR"
+                        why = "Sin momentum."
+                    else:
+                        rec = "⛔ VENDER/CASH"
+                        why = "Caos peligroso sin dirección."
+
                     res = f"""
-                    ### 🌡️ Diagnóstico: {t}
-                    **Precio:** ${price:.2f} | **Gobernanza Ψ:** {psi:.0f}%
+                    ### 🔬 Diagnóstico: {t}
+                    **Precio:** ${last:,.2f} | **Gobernanza:** {psi:.0f}%
                     
-                    **Estado de la Materia:** <span style='color:{c_estado}; font-size:1.2em'>**{estado}**</span>
-                    * **Reynolds:** {re:.0f} (Fricción Entrópica: {h:.2f})
+                    **Estado:** **{est}** (Re: {re:.0f})
+                    > {why}
                     
-                    **¿Qué significa?**
+                    **Veredicto:** {rec}
                     """
-                    if "LÍQUIDO" in estado: res += "El activo fluye libremente. Es zona de compra y acumulación."
-                    elif "GASEOSO" in estado: res += "Alta entropía y caos. Las partículas (precios) chocan violentamente. **ALTO RIESGO.**"
-                    elif "PLASMA" in estado: res += "Energía extrema. Subida vertical insostenible a largo plazo, pero muy rentable ahora."
-                    elif "SÓLIDO" in estado: res += "El precio está congelado o cayendo ordenadamente. No hay energía cinética."
-                    
-                    st.markdown(res, unsafe_allow_html=True)
-                    st.session_state.messages.append({"role": "assistant", "content": res})
-                else:
-                    st.error("Ticker no encontrado.")
+                    st.markdown(res)
+                    st.session_state.chat.append({"role":"assistant", "content":res})
+                else: st.error("Ticker no encontrado.")
 
-# --- MÓDULO 2: PORTAFOLIO ---
-elif app_mode == "💼 GESTIÓN PORTAFOLIOS":
-    st.title("Gobernanza de Capital (Ψ)")
-    st.markdown(f"Optimizado para perfil: **{risk_profile}**")
+# --- MACRO (ARREGLADO) ---
+elif app_mode == "🌎 MACRO FRACTAL":
+    st.title("Tablero Macroeconómico")
+    # Proxies más robustos que no fallan en Yahoo
+    macros = {
+        "USA (S&P 500)": "SPY", 
+        "USA (Dólar Index)": "UUP", # Cambiado de DX-Y a UUP
+        "MUNDO (All World)": "VT",
+        "EMERGENTES": "EEM",
+        "CHINA": "MCHI",
+        "EUROPA": "VGK"
+    }
     
-    with st.expander("📝 Configuración de Cartera", expanded=True):
-        col1, col2 = st.columns(2)
-        sel = col1.multiselect("Activos:", list(ASSET_DB.keys()), default=["PALANTIR (PLTR)", "NVIDIA (NVDA)"])
-        manual = col2.text_input("Manual (Separado por comas):", "COIN")
-        
-        if st.button("⚖️ Calcular Pesos Termodinámicos"):
-            tickers = get_tickers_from_selection(sel, manual)
-            allocations = {}
-            valid_tickers = []
+    sel_m = st.selectbox("Región / Indicador", list(macros.keys()))
+    
+    if st.button("Escanear Macro"):
+        t = macros[sel_m]
+        df = download_data(t, "2y")
+        if not df.empty:
+            re, _, psi, est = fisica.calcular_hidrodinamica(df, risk_profile, h_param)
             
-            for t in tickers:
-                hist = download_data(t, "6mo")
-                if not hist.empty:
-                    _, _, psi, estado = fisica.calcular_hidrodinamica(hist, risk_profile)
-                    # Si es Gaseoso, Psi ya viene castigado por el motor físico
-                    allocations[t] = psi
-                    valid_tickers.append(t)
-            
-            total_psi = sum(allocations.values())
-            if total_psi > 0:
-                final_w = {k: v/total_psi for k, v in allocations.items() if v > 0}
-                st.session_state['portfolio'] = (final_w, allocations)
-            else:
-                st.session_state['portfolio'] = ("CASH", {})
-
-    if 'portfolio' in st.session_state:
-        weights, raw_psi = st.session_state['portfolio']
-        
-        if weights == "CASH":
-            st.error("⚠️ ALERTA DE SISTEMA: El mercado está GASEOSO. La recomendación es 100% CASH.")
-        else:
-            st.subheader("Distribución Sugerida")
-            
-            c1, c2 = st.columns([1, 1])
+            c1, c2 = st.columns([1,2])
             with c1:
-                df_show = pd.DataFrame(list(weights.items()), columns=['Activo', 'Peso'])
-                df_show['Psi (Fuerza)'] = df_show['Activo'].map(raw_psi).map("{:.0f}%".format)
-                df_show['Peso'] = df_show['Peso'].map("{:.1%}".format)
-                st.dataframe(df_show, hide_index=True)
+                st.metric("Salud (Ψ)", f"{psi:.0f}/100")
+                st.info(f"Estado: {est}")
             with c2:
-                fig = px.pie(names=weights.keys(), values=weights.values(), title="Allocation", hole=0.4)
+                fig = px.line(df, y="Close", title=f"Tendencia {sel_m}")
                 st.plotly_chart(fig, use_container_width=True)
-                
-            st.info("💡 **Nota:** Activos con Psi bajo (<20%) han sido excluidos o reducidos automáticamente para proteger el capital.")
+        else:
+            st.error("Datos macro no disponibles temporalmente.")
 
-# --- MÓDULO 3: SCANNER ---
-elif app_mode == "🔍 SCANNER FÍSICO":
-    st.title("Scanner de Estados de la Materia")
-    defaults = ["NVIDIA (NVDA)", "TESLA (TSLA)", "BITCOIN (BTC-USD)", "GOOGLE (GOOGL)"]
-    sel = st.multiselect("Universo:", list(ASSET_DB.keys()), default=defaults)
+# --- PORTAFOLIO ---
+elif app_mode == "💼 PORTAFOLIO":
+    st.title("Gestión de Cartera Flexible")
     
-    if st.button("Escanear"):
-        tickers = get_tickers_from_selection(sel, "")
-        data = []
+    with st.expander("Activos", expanded=True):
+        c1, c2 = st.columns(2)
+        sel = c1.multiselect("Tickers:", list(ASSET_DB.keys()), default=["NVIDIA (NVDA)", "BITCOIN (BTC-USD)"])
+        man = c2.text_input("Manual:", "")
         
-        for t in tickers:
-            df = download_data(t, "6mo")
-            if not df.empty:
-                re, h, psi, estado = fisica.calcular_hidrodinamica(df, risk_profile)
-                data.append({
-                    "Ticker": t, "Precio": df['Close'].iloc[-1],
-                    "Psi (Ψ)": psi, "Estado": estado, "Reynolds": re, "Entropía": h
-                })
-        
-        if data:
-            df_res = pd.DataFrame(data).sort_values("Psi (Ψ)", ascending=False)
+        if st.button("⚖️ Calcular Pesos"):
+            ts = get_tickers(sel, man)
+            res = {}
+            for t in ts:
+                df = download_data(t, "1y")
+                if not df.empty:
+                    # Usamos el perfil seleccionado para ser mas valientes
+                    _, _, psi, est = fisica.calcular_hidrodinamica(df, risk_profile, h_param)
+                    res[t] = psi
             
-            def color_states(val):
-                if "LÍQUIDO" in val: return 'background-color: #d4edda; color: #155724' # Verde
-                if "GASEOSO" in val: return 'background-color: #f8d7da; color: #721c24' # Rojo
-                if "PLASMA" in val: return 'background-color: #e2e3e5; color: #383d41'  # Gris/Plasma
-                return ''
-            
-            st.dataframe(df_res.style.applymap(color_states, subset=['Estado']))
-            
-            # Mapa Visual
-            fig = px.scatter(df_res, x="Reynolds", y="Psi (Ψ)", color="Estado", text="Ticker", 
-                             size="Psi (Ψ)", title="Mapa de Fases Termodinámico",
-                             color_discrete_map={"LÍQUIDO":"green", "GASEOSO":"red", "PLASMA":"purple", "SÓLIDO":"gray"})
-            fig.add_vline(x=4500, line_dash="dash", line_color="red", annotation_text="Límite Turbulencia")
-            st.plotly_chart(fig)
-            
-            with st.expander("📚 Guía de Estados"):
-                st.markdown("""
-                * **🟢 LÍQUIDO:** Flujo laminar. Tendencia sana y predecible. **(Compra)**
-                * **🟣 PLASMA:** Flujo super-laminar. Subida explosiva con alta energía. **(Mantener con Stop-Loss)**
-                * **⚪ SÓLIDO:** Estancamiento o caída lenta. El dinero está congelado. **(Esperar)**
-                * **🔴 GASEOSO:** Turbulencia caótica. El precio se mueve sin dirección clara y con violencia. **(Vender/Cash)**
-                """)
+            tot = sum(res.values())
+            if tot > 0:
+                final = {k: v/tot for k,v in res.items() if v > 0}
+                st.session_state['port'] = final
+            else: st.session_state['port'] = "CASH"
 
-# --- MÓDULO 4: ORÁCULO ---
+    if 'port' in st.session_state:
+        p = st.session_state['port']
+        if p == "CASH": st.warning("Mercado peligroso. Recomendación: 100% Efectivo.")
+        else:
+            df_p = pd.DataFrame(list(p.items()), columns=['Activo', 'Peso'])
+            df_p['Peso'] = df_p['Peso'].map("{:.1%}".format)
+            
+            c1, c2 = st.columns(2)
+            c1.dataframe(df_p, hide_index=True)
+            c2.plotly_chart(px.pie(names=p.keys(), values=p.values(), title="Asignación"), use_container_width=True)
+
+# --- BACKTEST FLEXIBLE ---
+elif app_mode == "⏳ BACKTEST FLEX":
+    st.title("Laboratorio de Validación")
+    
+    c1, c2, c3 = st.columns(3)
+    tck = c1.text_input("Activo:", "NVDA").upper()
+    periodo = c2.selectbox("Historial:", ["1y", "2y", "5y", "10y", "max"], index=2)
+    intervalo = c3.selectbox("Velas:", ["1d", "1wk"], index=0)
+    
+    if st.button("Ejecutar Simulación"):
+        df = download_data(tck, periodo, intervalo)
+        
+        if not df.empty:
+            # Lógica Vectorizada (Aprox Physics)
+            df['Ret'] = df['Close'].pct_change()
+            
+            # Medias Móviles según selección
+            w_trend = 50 if intervalo == "1d" else 20
+            
+            # Tendencia de Fondo
+            df['Trend'] = (df['Close'] - df['Close'].shift(w_trend)) / df['Close'].shift(w_trend)
+            
+            # Física Simplificada
+            df['Volatilidad'] = df['Ret'].rolling(20).std()
+            
+            # SEÑAL FLEXIBLE:
+            # Si el usuario es "Quantum" o "Growth", permitimos más volatilidad
+            umbral_trend = 0.0 if risk_profile != "Conservador" else 0.05
+            
+            # Lógica: Estar dentro si la tendencia es positiva, ignorando ruido diario
+            df['Signal'] = np.where(df['Trend'] > umbral_trend, 1, 0)
+            
+            # Filtro de Caída Brusca (Solo salimos si cae muy fuerte rápido)
+            # Esto evita salir en correcciones pequeñas (-5%) pero sale en crashes (-15%)
+            crash_limit = -0.15 if risk_profile == "Quantum" else -0.10
+            drawdown_fast = df['Close'].pct_change(10) 
+            df['Signal'] = np.where(drawdown_fast < crash_limit, 0, df['Signal'])
+            
+            df['Signal'] = df['Signal'].shift(1)
+            df['Strat'] = df['Ret'] * df['Signal']
+            df['Cum_Faros'] = (1 + df['Strat']).cumprod()
+            df['Cum_Hold'] = (1 + df['Ret']).cumprod()
+            
+            ret_f = (df['Cum_Faros'].iloc[-1]-1)*100
+            ret_h = (df['Cum_Hold'].iloc[-1]-1)*100
+            
+            k1, k2 = st.columns(2)
+            k1.metric("FAROS (Flexible)", f"{ret_f:,.1f}%", delta=f"{ret_f-ret_h:.1f}%")
+            k2.metric("Buy & Hold", f"{ret_h:,.1f}%")
+            
+            st.line_chart(df[['Cum_Hold', 'Cum_Faros']])
+        else: st.error("No hay datos para ese periodo.")
+
+# --- ORÁCULO EXTENDIDO ---
 elif app_mode == "🔮 ORÁCULO":
-    st.title("Proyección Cuántica (Monte Carlo)")
-    st.caption("Proyecta el cono de probabilidad basado en la física actual.")
+    st.title("Proyección Cuántica")
     
     c1, c2 = st.columns(2)
     t = c1.text_input("Activo:", "BTC-USD").upper()
-    days = c2.slider("Días a Futuro:", 30, 365, 90)
+    # Selector de horizonte más amplio
+    horizonte_dias = c2.select_slider("Horizonte de Proyección:", options=[30, 90, 180, 365, 730], value=365)
     
-    if st.button("Consultar Oráculo"):
-        hist = download_data(t, "1y")
-        if not hist.empty:
-            re, _, _, estado = fisica.calcular_hidrodinamica(hist, risk_profile)
-            last_price = hist['Close'].iloc[-1]
+    if st.button("Proyectar Futuro"):
+        df = download_data(t, "2y") # Usamos 2 años para mejor estadística
+        if not df.empty:
+            last = df['Close'].iloc[-1]
+            re, _, _, est = fisica.calcular_hidrodinamica(df, risk_profile, h_param)
             
-            # Ajuste de Volatilidad por Física
-            daily_vol = hist['Close'].pct_change().std()
-            if "GASEOSO" in estado: daily_vol *= 1.8 # Mucha incertidumbre
-            elif "PLASMA" in estado: daily_vol *= 1.2 # Volatilidad direccional
+            # Drift (Tendencia Anualizada)
+            log_ret = np.log(df['Close']/df['Close'].shift(1))
+            mu = log_ret.mean() * 252
+            sigma = log_ret.std() * 252**0.5
+            
+            # Ajuste Físico: Si es PLASMA (Tendencia fuerte), proyectamos continuación
+            if "PLASMA" in est or "LÍQUIDO" in est:
+                mu = max(0.10, mu) # Asumimos piso de crecimiento positivo
             
             # Simulación
-            paths = np.zeros((days, 1000))
-            paths[0] = last_price
-            drift = hist['Close'].pct_change().mean()
+            T = horizonte_dias/365
+            steps = horizonte_dias
+            sims = 1000
+            dt = 1/365
             
-            for d in range(1, days):
-                shock = np.random.normal(0, daily_vol, 1000)
-                paths[d] = paths[d-1] * np.exp(drift + shock)
+            paths = np.zeros((steps, sims))
+            paths[0] = last
             
-            # Resultados Finales
-            final_prices = paths[-1]
-            p90 = np.percentile(final_prices, 90) # Optimista
-            p50 = np.percentile(final_prices, 50) # Base
-            p10 = np.percentile(final_prices, 10) # Pesimista
+            for i in range(1, steps):
+                # Movimiento Browniano Geométrico
+                shock = np.random.normal(0, 1, sims)
+                paths[i] = paths[i-1] * np.exp((mu - 0.5*sigma**2)*dt + sigma*np.sqrt(dt)*shock)
+                
+            final = paths[-1]
+            p_opt = np.percentile(final, 90)
+            p_base = np.percentile(final, 50)
+            p_pes = np.percentile(final, 10)
             
-            # UI DE RESULTADOS
-            st.markdown(f"### Proyección a {days} días para {t}")
-            st.info(f"Estado Inicial: **{estado}**. La volatilidad se ha ajustado acorde al riesgo físico.")
-            
+            st.subheader(f"Objetivos a {horizonte_dias} días")
             k1, k2, k3 = st.columns(3)
-            k1.metric("🟢 Techo (Optimista)", f"${p90:,.2f}", f"{((p90/last_price)-1)*100:.1f}%")
-            k2.metric("🔵 Escenario Base", f"${p50:,.2f}", f"{((p50/last_price)-1)*100:.1f}%")
-            k3.metric("🔴 Suelo (Riesgo)", f"${p10:,.2f}", f"{((p10/last_price)-1)*100:.1f}%")
+            k1.metric("🚀 Optimista", f"${p_opt:,.2f}", f"{((p_opt/last)-1)*100:.0f}%")
+            k2.metric("⚖️ Base", f"${p_base:,.2f}", f"{((p_base/last)-1)*100:.0f}%")
+            k3.metric("🛡️ Soporte", f"${p_pes:,.2f}", f"{((p_pes/last)-1)*100:.0f}%")
             
             # Gráfico de Cono
             fig = go.Figure()
-            # Muestra solo 50 caminos para no saturar
-            for i in range(50):
-                fig.add_trace(go.Scatter(y=paths[:, i], line=dict(color='gray', width=0.5), opacity=0.1, showlegend=False))
+            x_axis = [datetime.now() + timedelta(days=i) for i in range(steps)]
             
-            fig.add_trace(go.Scatter(y=np.percentile(paths, 90, axis=1), name='Optimista', line=dict(color='green', dash='dash')))
-            fig.add_trace(go.Scatter(y=np.percentile(paths, 50, axis=1), name='Base', line=dict(color='blue', width=2)))
-            fig.add_trace(go.Scatter(y=np.percentile(paths, 10, axis=1), name='Piso', line=dict(color='red', dash='dash')))
+            fig.add_trace(go.Scatter(x=x_axis, y=np.percentile(paths, 90, axis=1), name='Techo', line=dict(color='green', dash='dash')))
+            fig.add_trace(go.Scatter(x=x_axis, y=np.percentile(paths, 50, axis=1), name='Probable', line=dict(color='blue')))
+            fig.add_trace(go.Scatter(x=x_axis, y=np.percentile(paths, 10, axis=1), name='Suelo', line=dict(color='red', dash='dash')))
             
             st.plotly_chart(fig, use_container_width=True)
-
-# --- MÓDULO 5: BACKTEST ---
-elif app_mode == "⏳ BACKTEST LAB":
-    st.title("Laboratorio de Validación")
-    st.caption("Prueba cómo hubiera rendido la estrategia hidrodinámica en el pasado.")
-    
-    tck = st.text_input("Activo:", "NVDA").upper()
-    
-    if st.button("Ejecutar Simulación"):
-        df = download_data(tck, "2y")
-        if not df.empty:
-            # Cálculo Vectorizado para Backtest (Simplificado)
-            df['Ret'] = df['Close'].pct_change()
-            df['Vol_SMA'] = df['Volume'].rolling(14).mean()
-            df['Density'] = df['Volume'] / df['Vol_SMA']
-            df['Velocity'] = df['Ret'].abs().rolling(3).mean()
-            df['Spread'] = (df['High']-df['Low'])/df['Close']
-            df['Viscosity'] = df['Spread'].rolling(3).mean().fillna(0.01)
-            df['L'] = df['Close'].rolling(14).std() / df['Close']
-            
-            K = 150000
-            df['Re'] = (df['Density'] * df['Velocity'] * df['L'] / df['Viscosity']) * K
-            
-            # Lógica de Compra/Venta según Perfil Growth
-            # Comprar si es Laminar (<3000) o si es Super-Laminar (Re alto pero tendencia fuerte)
-            sma_short = df['Close'].rolling(10).mean()
-            sma_long = df['Close'].rolling(50).mean()
-            uptrend = sma_short > sma_long
-            
-            # SEÑAL:
-            # 1. Comprar si Re < 3000 (Laminar)
-            # 2. Mantener si Re > 3000 PERO Uptrend es fuerte (Plasma)
-            # 3. Vender si Re > 5000 y Uptrend se rompe (Gas)
-            
-            df['Signal'] = np.where((df['Re'] < 3000) | ((df['Re'] < 6000) & uptrend), 1, 0)
-            df['Signal'] = df['Signal'].shift(1)
-            
-            df['Strat'] = df['Ret'] * df['Signal']
-            df['Cum_Strat'] = (1 + df['Strat']).cumprod()
-            df['Cum_BH'] = (1 + df['Ret']).cumprod()
-            
-            r_strat = (df['Cum_Strat'].iloc[-1]-1)*100
-            r_bh = (df['Cum_BH'].iloc[-1]-1)*100
-            
-            k1, k2 = st.columns(2)
-            k1.metric("Retorno FAROS", f"{r_strat:.1f}%", delta=f"{r_strat - r_bh:.1f}% vs Buy&Hold")
-            k2.metric("Retorno Mercado", f"{r_bh:.1f}%")
-            
-            st.line_chart(df[['Cum_BH', 'Cum_Strat']])
-            st.info("La línea azul es FAROS. Observa cómo se mantiene plana (Cash) durante las caídas turbulentas.")
+            st.caption(f"Basado en volatilidad histórica ({sigma*100:.1f}%) ajustada por estado actual: {est}")
