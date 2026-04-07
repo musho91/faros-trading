@@ -86,13 +86,21 @@ def fetch_market_data(ticker, period="1y"):
 
 @st.cache_data(ttl=300)
 def get_global_context(profile):
-    spy = fetch_market_data("SPY", "6mo")
+    spy = fetch_market_data("SPY", "1y")
     if spy.empty:
         return "#6b7280", 0, "Data Feed Offline", pd.DataFrame()
-    re, future, psi, regime = fisica.calcular_metricas_institucionales(spy, profile)
-    msg = f"{regime}  |  Re: {re:.0f}%ile"
-    color = "#16a34a" if "ACCUMULATION" in regime else ("#dc2626" if "BREAK" in regime else "#d97706")
-    return color, psi, msg, spy
+    try:
+        metrics = fisica.calcular_metricas_completas(spy, profile)
+        if metrics is None:
+            return "#6b7280", 0, "Insufficient Data", spy
+        re_pct = metrics.reynolds_pct if metrics.reynolds_pct > 0 else 50.0
+        psi = metrics.psi
+        regime = metrics.regime
+        msg = f"{regime}  |  Re: {re_pct:.0f}%ile"
+        color = "#16a34a" if "ACCUMULATION" in regime else ("#dc2626" if "BREAK" in regime else "#d97706")
+        return color, psi, msg, spy
+    except Exception:
+        return "#6b7280", 0, "Calculation Error", spy
 
 def signal_from_regime(psi, regime):
     if "ACCUMULATION" in regime and psi >= 50:
@@ -153,7 +161,14 @@ if app_mode == "🤖 QUANT ANALYST":
 
         with st.chat_message("assistant"):
             with st.spinner("Running TAI-ACF engine..."):
-                ticker = prompt.upper().replace("$", "").split()[0]
+                # Extrae el token que más parece un ticker (1-7 chars, solo letras y guión)
+                # Así "analiza PLTR" o "dame NVDA" funciona correctamente
+                tokens = prompt.upper().replace("$", "").split()
+                ticker = next(
+                    (t for t in reversed(tokens)
+                     if t.replace("-", "").isalpha() and 1 <= len(t) <= 7),
+                    tokens[-1]
+                )
                 df = fetch_market_data(ticker, "2y")
 
                 if not df.empty:
@@ -163,7 +178,6 @@ if app_mode == "🤖 QUANT ANALYST":
                         last_price = df['Close'].iloc[-1]
                         signal, sig_color = signal_from_regime(metrics.psi, metrics.regime)
 
-                        # Layout principal
                         c1, c2, c3, c4 = st.columns(4)
                         c1.metric("Last Price", f"${last_price:,.2f}")
                         c2.metric("Governance Ψ", f"{metrics.psi:.1f}/100")
@@ -177,7 +191,6 @@ if app_mode == "🤖 QUANT ANALYST":
                             unsafe_allow_html=True
                         )
 
-                        # Métricas físicas detalladas
                         with st.expander("🔬 Physical Metrics (TAI-ACF)"):
                             m1, m2, m3, m4 = st.columns(4)
                             m1.metric("Regime", metrics.regime)
@@ -189,7 +202,6 @@ if app_mode == "🤖 QUANT ANALYST":
                             mu_col.metric("Viscosity (µ)", f"{metrics.viscosity_mu:.5f}")
                             rho_col.metric("Density (ρ)", f"{metrics.density_rho:.2f}")
 
-                        # Gráfico de precio
                         fig = go.Figure()
                         fig.add_trace(go.Scatter(
                             x=df.index, y=df['Close'],
@@ -269,7 +281,6 @@ elif app_mode == "💼 PORTFOLIO BUILDER":
                 total = sum(scores.values())
                 weights = {t: s / total for t, s in scores.items()}
 
-                # Pie chart
                 fig = go.Figure(go.Pie(
                     labels=list(weights.keys()),
                     values=[round(w * 100, 1) for w in weights.values()],
@@ -283,7 +294,6 @@ elif app_mode == "💼 PORTFOLIO BUILDER":
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
-                # Tabla de asignación
                 alloc_df = pd.DataFrame([
                     {"Ticker": t, "Weight": f"{w*100:.1f}%", "USD Allocation": f"${w*capital:,.0f}"}
                     for t, w in weights.items()
@@ -340,12 +350,11 @@ elif app_mode == "🔍 ALPHA SCANNER":
                 return 'background-color: #1f2937; color: #9ca3af'
 
             styled = df_res.style\
-                .applymap(color_regime, subset=['Regime'])\
+                .map(color_regime, subset=['Regime'])\
                 .format({"Last Price": "${:.2f}", "Future Alpha": "{:.1f}", "Ψ Score": "{:.1f}"})
 
             st.dataframe(styled, use_container_width=True, hide_index=True)
 
-            # Alpha Map scatter
             fig = px.scatter(
                 df_res, x="Future Alpha", y="Ψ Score",
                 color="Regime", size="Ψ Score", hover_name="Ticker",
@@ -396,7 +405,6 @@ elif app_mode == "⏳ BACKTEST LAB":
             perf_s = (df['Strategy'].iloc[-1] - 1) * 100
             perf_bh = (df['BuyHold'].iloc[-1] - 1) * 100
 
-            # Sharpe aproximado
             strat_returns = df['Ret'] * df['Signal']
             sharpe = (strat_returns.mean() / strat_returns.std() * np.sqrt(252)) if strat_returns.std() > 0 else 0
 
@@ -441,7 +449,6 @@ elif app_mode == "🔮 ORACLE PROJECTIONS":
 
             re, future, psi, regime = fisica.calcular_metricas_institucionales(df, risk_profile)
 
-            # Ajuste por régimen estructural
             if "MOMENTUM" in regime or "ACCUMULATION" in regime:
                 mu = max(0.15, mu)
 
